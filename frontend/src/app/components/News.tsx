@@ -29,7 +29,7 @@ interface NewsData {
       setLoading(true);
       try {
         const response = await fetch(
-          "https://richmaster-aubpechkfafyegfy.eastasia-01.azurewebsites.net/api/flashnews?language=${locale}"
+          "https://tradingwithaiservice-f0drbtcthje3chbp.eastasia-01.azurewebsites.net/api/flashnews?language=${locale}"
         );
   
         if (!response.ok) {
