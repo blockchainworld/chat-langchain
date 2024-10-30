@@ -38,8 +38,12 @@ import { useLocalStorage } from "../hooks/useLocalStorage";
 
 import { RegisterForm } from "./RegisterForm";
 import { AboutUs } from "./AboutUs";
+import { News } from "./News"
 import { RichMasterFunds } from "./RichMasterFunds";
+import { RichMasterAI } from "./RichMatserAI";
 import { PricingPlan } from "./PricingPlan";
+import { useTranslations, useLocale } from 'next-intl';
+
 
 const MODEL_TYPES = ["openai_gpt_4o_mini", "anthropic_claude_3_haiku"];
 
@@ -61,16 +65,7 @@ const getAssistantId = async (client: Client) => {
   return response[0]["assistant_id"];
 };
 
-// // Add mock stock data
-// const mockStockData = [
-//   { name: "Dow Jones", value: "34,721.91", change: "+0.30%" },
-//   { name: "NASDAQ", value: "15,785.32", change: "-0.15%" },
-//   { name: "S&P 500", value: "4,509.23", change: "+0.20%" },
-//   { symbol: "AAPL", price: "150.25", change: "+1.25%" },
-//   { symbol: "MSFT", price: "305.15", change: "+0.75%" },
-//   { symbol: "GOOGL", price: "2750.80", change: "-0.20%" },
-//   { symbol: "AMZN", price: "3380.45", change: "+1.50%" },
-// ];
+
 interface StockData {
   name?: string;
   value?: string | number;
@@ -80,61 +75,7 @@ interface StockData {
 }
 
 type SetStockDataFunction = React.Dispatch<React.SetStateAction<StockData[]>>;
-// // Add StockPanel component
-// interface StockPanelProps {
-//   isVisible: boolean;
-//   onClose: () => void;
-// }
 
-// const StockPanel: React.FC<StockPanelProps> = ({ isVisible, onClose }) => (
-//   <Box
-//     position="fixed"
-//     right="0"
-//     top="0"
-//     bottom="0"
-//     width="300px"
-//     bg="#2D3748"
-//     p={4}
-//     overflowY="auto"
-//     transform={isVisible ? "translateX(0)" : "translateX(100%)"}
-//     transition="transform 0.3s"
-//     zIndex="5"
-//   >
-//     <Flex justify="space-between" align="center" mb={4}>
-//       <Heading size="md" color="white">Stock Info</Heading>
-//       <IconButton
-//         icon={<CloseIcon />}
-//         onClick={onClose}
-//         aria-label="Close stock panel"
-//         size="sm"
-//         variant="ghost"
-//         color="white"
-//       />
-//     </Flex>
-//     <VStack align="stretch" spacing={4}>
-//       <Box>
-//         <Heading size="sm" color="white" mb={2}>Market Indices</Heading>
-//         {mockStockData.slice(0, 3).map((index) => (
-//           <Flex key={index.name} justify="space-between" color="white">
-//             <Text>{index.name}</Text>
-//             <Text>{index.value}</Text>
-//             <Text color={index.change.startsWith('+') ? "green.300" : "red.300"}>{index.change}</Text>
-//           </Flex>
-//         ))}
-//       </Box>
-//       <Box>
-//         <Heading size="sm" color="white" mb={2}>Popular Stocks</Heading>
-//         {mockStockData.slice(3).map((stock) => (
-//           <Flex key={stock.symbol} justify="space-between" color="white">
-//             <Text>{stock.symbol}</Text>
-//             <Text>{stock.price}</Text>
-//             <Text color={stock.change.startsWith('+') ? "green.300" : "red.300"}>{stock.change}</Text>
-//           </Flex>
-//         ))}
-//       </Box>
-//     </VStack>
-//   </Box>
-// );
 
 // Replace with your actual stock API URL and key
 const STOCK_API_URL = 'https://yfinance-fza5dthrg6dxd2c3.southeastasia-01.azurewebsites.net/api';
@@ -228,7 +169,8 @@ const StockPanel: React.FC<StockPanelProps> = ({ isVisible, onClose }) => {
     }
     return change;
   };
-  
+  const t = useTranslations('HomePage');
+  const locale = useLocale();
   return (
     <Box
       position="fixed"
@@ -244,7 +186,7 @@ const StockPanel: React.FC<StockPanelProps> = ({ isVisible, onClose }) => {
       zIndex="5"
     >
       <Flex justify="space-between" align="center" mb={4}>
-        <Heading size="md" color="white">Stock Info</Heading>
+        <Heading size="md" color="white">{t('Stock Info')}</Heading>
         <IconButton
           icon={<CloseIcon />}
           onClick={onClose}
@@ -256,7 +198,7 @@ const StockPanel: React.FC<StockPanelProps> = ({ isVisible, onClose }) => {
       </Flex>
       <VStack align="stretch" spacing={4}>
         <Box>
-          <Heading size="sm" color="white" mb={2}>Market Indices</Heading>
+          <Heading size="sm" color="white" mb={2}>{t('Market Indices')}</Heading>
           {stockData.slice(0, 3).map((index) => (
             <Flex key={index.name} justify="space-between" color="white">
               <Text width="30%" textAlign="left">{index.symbol}</Text>
@@ -266,7 +208,7 @@ const StockPanel: React.FC<StockPanelProps> = ({ isVisible, onClose }) => {
           ))}
         </Box>
         <Box>
-          <Heading size="sm" color="white" mb={2}>Popular Stocks</Heading>
+          <Heading size="sm" color="white" mb={2}>{t('Popular Stocks')}</Heading>
           {stockData.slice(3).map((stock) => (
             <Flex key={stock.symbol} justify="space-between" color="white">
               <Text width="30%" textAlign="left">{stock.symbol}</Text>
@@ -284,6 +226,8 @@ const StockPanel: React.FC<StockPanelProps> = ({ isVisible, onClose }) => {
 export function ChatWindow() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const locale = useLocale();
+  const t = useTranslations('HomePage');
 
   const messageContainerRef = useRef<HTMLDivElement | null>(null);
   const newestMessageRef = useRef<HTMLDivElement>(null);
@@ -455,7 +399,9 @@ export function ChatWindow() {
       setIsRegistering(false);  // <-- Add this line to reset the registration state
       setIsAboutUs(false);
       setIsRichMasterFunds(false);
+      setIsRichMasterAI(false);
       setIsPricingPlan(false);
+      setIsNews(false);
       setIsPreviousChats(false)
 
       if (!id) {
@@ -485,14 +431,19 @@ export function ChatWindow() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [isAboutUs, setIsAboutUs] = useState(false);
   const [isRichMasterFunds, setIsRichMasterFunds] = useState(false);
+  const [isRichMasterAI, setIsRichMasterAI] = useState(false);
   const [isPricingPlan, setIsPricingPlan] = useState(false);
   const [isPreviousChats, setIsPreviousChats] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isNews, setIsNews] = useState(false);
 
   const enterRegister = useCallback(() => {
     setIsRegistering(true);
     setIsRichMasterFunds(false);
-    setIsPricingPlan(false)
+    setIsRichMasterAI(false);
+    setIsPricingPlan(false);
     setIsChatListVisible(false);
+    setIsNews(false);
     setIsAboutUs(false);
     setIsPreviousChats(false);
   }, []);
@@ -500,18 +451,33 @@ export function ChatWindow() {
   const enterAboutUs = useCallback(() => {
     setIsRegistering(false);
     setIsRichMasterFunds(false);
+    setIsRichMasterAI(false);
     setIsPricingPlan(false);
     setIsAboutUs(true);
     setIsChatListVisible(false);
+    setIsNews(false);
     setIsPreviousChats(false);
   }, []);
 
   const enterRichMasterFunds = useCallback(() => {
     setIsRegistering(false);
     setIsRichMasterFunds(true);
+    setIsRichMasterAI(false);
     setIsPricingPlan(false);
     setIsAboutUs(false);
     setIsChatListVisible(false);
+    setIsNews(false);
+    setIsPreviousChats(false);
+  }, []);
+
+  const enterRichMasterAI = useCallback(() => {
+    setIsRegistering(false);
+    setIsRichMasterFunds(false);
+    setIsRichMasterAI(true);
+    setIsPricingPlan(false);
+    setIsAboutUs(false);
+    setIsChatListVisible(false);
+    setIsNews(false);
     setIsPreviousChats(false);
   }, []);
 
@@ -519,8 +485,10 @@ export function ChatWindow() {
     setIsRegistering(false);
     setIsRichMasterFunds(false);
     setIsPricingPlan(true);
+    setIsRichMasterAI(false);
     setIsAboutUs(false);
     setIsChatListVisible(false);
+    setIsNews(false);
     setIsPreviousChats(false);
   }, []);
 
@@ -528,10 +496,33 @@ export function ChatWindow() {
     setIsRegistering(false);
     setIsRichMasterFunds(false);
     setIsPricingPlan(false);
+    setIsRichMasterAI(false);
     setIsAboutUs(false);
     setIsPreviousChats(true);
     setIsChatListVisible(false);
+    setIsNews(false);
     setIsPreviousChats(true);
+  }, []);
+
+  
+  const enterNews = useCallback(() => {
+    setIsRegistering(false);
+    setIsRichMasterFunds(false);
+    setIsRichMasterAI(false);
+    setIsPricingPlan(false);
+    setIsAboutUs(false);
+    setIsNews(true);
+    setIsChatListVisible(false);
+    setIsPreviousChats(false);
+  }, []);
+
+  const handleBackToLogin = useCallback(() => {
+    setIsRegistering(false);
+    setIsRichMasterAI(true); // 确保切换到 RichMasterAI 组件
+  }, []);
+
+  const handleRegisterClick = useCallback(() => {
+    setIsRegistering(true);
   }, []);
 
   return (
@@ -577,7 +568,9 @@ export function ChatWindow() {
             loadMoreThreads={loadMoreThreads}
             enterRegister={enterRegister}
             enterAboutUs={enterAboutUs}
+            enterNews={enterNews}
             enterRichMasterFunds={enterRichMasterFunds}
+            enterRichMasterAI={enterRichMasterAI}
             enterPricingPlan={enterPricingPlan}
             enterPreviousChats={enterPreviousChats}
           />
@@ -592,7 +585,7 @@ export function ChatWindow() {
               color="white"
               textAlign="center"
             >
-              RichMaster StockGPT 🪙
+              {t('RichMaster StockGPT')} 🪙  
             </Heading>
           </Flex>
           <IconButton
@@ -605,13 +598,40 @@ export function ChatWindow() {
             zIndex="10"
           />
           {isRegistering ? (
-            <RegisterForm />
+            <RegisterForm  onBackToLogin={handleBackToLogin} />
           ) : isRichMasterFunds ? (
             <RichMasterFunds />
+          ) : isRichMasterAI ? (
+            <Box 
+            flex="1" 
+            overflowY="auto" 
+            px={4}
+            // 确保内容区域可以滚动
+            maxH="calc(100vh - 100px)" // 减去顶部导航和边距的高度
+            css={{
+              '&::-webkit-scrollbar': {
+                width: '4px',
+              },
+              '&::-webkit-scrollbar-track': {
+                width: '6px',
+              },
+              '&::-webkit-scrollbar-thumb': {
+                background: 'gray.500',
+                borderRadius: '24px',
+              },
+            }}
+          >
+            <RichMasterAI
+            onRegister={handleRegisterClick}
+          isAuthenticated={isAuthenticated}
+          setIsAuthenticated={setIsAuthenticated} />
+          </Box>
           ) : isPricingPlan ? (
             <PricingPlan />
           ): isAboutUs ? (
             <AboutUs />
+          ): isNews ? (
+            <News />
           ): isPreviousChats ? (
                         <Box flex="1" overflowY="auto" mb="2" maxH={["60vh", "60vh", "calc(100vh - 300px)"]} px={4}>
               {threads?.length ? (
@@ -663,7 +683,7 @@ export function ChatWindow() {
                 ))
               ) : (
                 <Text color="gray.400" textAlign="center" mt={4}>
-                  No previous chats found.
+                  {t('No previous chats found')} 
                 </Text>
               )}
             </Box>
@@ -727,7 +747,7 @@ export function ChatWindow() {
                     value={input}
                     maxRows={5}
                     mr="56px"
-                    placeholder="Discover stocks now"
+                    placeholder={t('Discover stocks now')}
                     textColor="white"
                     borderColor="rgb(58, 58, 61)"
                     onChange={(e) => setInput(e.target.value)}
@@ -761,7 +781,7 @@ export function ChatWindow() {
                 </InputGroup>
                 {messages.length === 0 && (
                   <Text as="footer" textAlign="center" mt={2} color="white">
-                    Start trading today!
+                    {t('Start trading today')}
                   </Text>
                 )}
               </Flex>
