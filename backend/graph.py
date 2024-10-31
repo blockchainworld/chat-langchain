@@ -34,6 +34,9 @@ from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
 from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
 
+from typing import Literal
+from langchain_community.tools import DuckDuckGoSearchRun
+
 
 RESPONSE_TEMPLATE = """
 You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
@@ -409,6 +412,46 @@ def route_to_response_synthesizer(
     else:
         return "response_synthesizer"
 
+# 添加新的搜索引擎节点函数
+def web_search_documents(state: AgentState) -> AgentState:
+    """当数据库检索无结果时，使用搜索引擎获取信息"""
+    if not state["documents"]:  # 如果数据库检索无结果
+        search = DuckDuckGoSearchRun()
+        messages = convert_to_messages(state["messages"])
+        query = messages[-1].content
+        
+        # 执行网络搜索
+        search_results = search.run(query)
+        
+        # 将搜索结果转换为Document格式
+        web_documents = [
+            Document(
+                page_content=search_results,
+                metadata={"source": "web_search", "title": "Web Search Results"}
+            )
+        ]
+        
+        state["documents"] = web_documents
+    
+    return state
+
+# 修改路由函数以包含网络搜索选项
+def route_to_response_generator(
+    state: AgentState,
+    config: RunnableConfig
+) -> Literal["response_synthesizer", "response_synthesizer_cohere", "web_search"]:
+    model_name = config.get("configurable", {}).get("model_name", OPENAI_MODEL_KEY)
+    
+    # 如果数据库检索无结果，路由到网络搜索
+    if not state["documents"]:
+        return "web_search"
+    
+    # 原有的路由逻辑
+    if model_name == COHERE_MODEL_KEY:
+        return "response_synthesizer_cohere"
+    else:
+        return "response_synthesizer"
+
 
 class Configuration(TypedDict):
     model_name: str
@@ -423,6 +466,7 @@ workflow = StateGraph(AgentState, Configuration, input=InputSchema)
 
 # define nodes
 workflow.add_node("stock_symbol_check", check_stock_symbols)
+workflow.add_node("web_search", web_search_documents)
 workflow.add_node("retriever", retrieve_documents)
 workflow.add_node("retriever_with_chat_history", retrieve_documents_with_chat_history)
 workflow.add_node("response_synthesizer", synthesize_response_default)
@@ -439,6 +483,7 @@ workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
 workflow.add_conditional_edges(
     "retriever_with_chat_history", route_to_response_synthesizer
 )
+workflow.add_edge("web_search", "response_synthesizer")
 
 # connect synthesizers to terminal node
 workflow.add_edge("response_synthesizer", END)
