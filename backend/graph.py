@@ -432,23 +432,6 @@ def web_search_documents(state: AgentState) -> AgentState:
     
     return state
 
-# 修改路由函数以包含网络搜索选项
-def route_to_response_generator(
-    state: AgentState,
-    config: RunnableConfig
-) -> Literal["response_synthesizer", "response_synthesizer_cohere", "web_search"]:
-    model_name = config.get("configurable", {}).get("model_name", OPENAI_MODEL_KEY)
-    
-    # 如果数据库检索无结果，路由到网络搜索
-    if not state["documents"]:
-        return "web_search"
-    
-    # 原有的路由逻辑
-    if model_name == COHERE_MODEL_KEY:
-        return "response_synthesizer_cohere"
-    else:
-        return "response_synthesizer"
-
 
 class Configuration(TypedDict):
     model_name: str
@@ -473,7 +456,7 @@ workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
 workflow.set_entry_point("stock_symbol_check")
 
 # connect stock symbol check to retrievers
-workflow.add_conditional_edges("stock_symbol_check", route_to_retriever，{
+workflow.add_conditional_edges("stock_symbol_check", route_to_retriever,{
         "web_search": "web_search",
         "retriever": "retriever",
         "retriever_with_chat_history": "retriever_with_chat_history"
