@@ -42,7 +42,7 @@ Generate a comprehensive and informative answer of 260 words or less for the giv
 
 Strictly maintain the length limit of 260 words/characters.
 
-For Chinese responses: Your answer MUST NOT exceed 320 characters. Keep responses focused and informative.
+For Chinese responses: Your answer MUST NOT exceed 150 characters. Keep responses focused and informative.
 
 You should use bullet points in your answer for readability. Put citations where they apply rather than putting them all at the end.
 
@@ -60,9 +60,9 @@ Anything between the following context html blocks is retrieved from a knowledge
 
 REMEMBER: If there is no relevant information within the context, create an answer based on your own knowledge as a stock, finance, and crypto expert and include the note about the source of the information. Anything between the preceding 'context' html blocks is retrieved from a knowledge bank, not part of the conversation with the user.
 
-如果输入的问题是中文,请用中文回答。如果输入的问题是英文,请用英文回答。
+如果输入的问题是中文,请用中文回答，字数限制是英文的一半，也就是150个字。如果输入的问题是英文,请用英文回答。
 
-中文回答总字数不能超过320。
+中文回答总字数不能超过150个字。
 """
 
 COHERE_RESPONSE_TEMPLATE = """\
