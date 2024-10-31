@@ -41,11 +41,11 @@ from langchain_community.tools import DuckDuckGoSearchRun
 RESPONSE_TEMPLATE = """
 You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
 
-Generate a comprehensive and informative answer of 500 words or less for the given question based on the provided search results (URL and content). Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
+Generate a comprehensive and informative answer of 300 words or less for the given question based on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
 
 You should use bullet points in your answer for readability. Put citations where they apply rather than putting them all at the end.
 
-If there is nothing in the context relevant to the question at hand, try your best to create an answer based on your own knowledge as a stock, finance, and crypto expert, but add a note at the end stating: "Note: This response is based on the AI's own knowledge as a stock, finance, and crypto expert, as no relevant information was found in the provided context."
+If there is nothing in the context relevant to the question at hand, try your best to create an answer based on your own knowledge as a stock, finance, and crypto expert.
 
 If the input question is in Chinese, respond in Chinese. If the input question is in English, respond in English.
 
@@ -279,9 +279,11 @@ def retrieve_documents_with_chat_history(
 
 def route_to_retriever(
     state: AgentState,
-) -> Literal["retriever", "retriever_with_chat_history"]:
+) -> Literal["web_search","retriever", "retriever_with_chat_history"]:
     # at this point in the graph execution there is exactly one (i.e. first) message from the user,
     # so use basic retriever without chat history
+    if not state.get("documents", []):
+        return "web_search"
     if len(state["messages"]) == 1:
         return "retriever"
     else:
@@ -471,14 +473,21 @@ workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
 workflow.set_entry_point("stock_symbol_check")
 
 # connect stock symbol check to retrievers
-workflow.add_conditional_edges("stock_symbol_check", route_to_retriever)
+workflow.add_conditional_edges("stock_symbol_check", route_to_retriever，{
+        "web_search": "web_search",
+        "retriever": "retriever",
+        "retriever_with_chat_history": "retriever_with_chat_history"
+    })
 
 # connect retrievers and response synthesizers
 workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
 workflow.add_conditional_edges(
     "retriever_with_chat_history", route_to_response_synthesizer
 )
-workflow.add_edge("web_search", "response_synthesizer")
+workflow.add_conditional_edges(
+    "web_search",
+    route_to_response_synthesizer
+)
 
 # connect synthesizers to terminal node
 workflow.add_edge("response_synthesizer", END)
