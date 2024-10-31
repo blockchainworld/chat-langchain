@@ -29,7 +29,7 @@ from langchain_openai import ChatOpenAI
 from langchain_weaviate import WeaviateVectorStore
 from langgraph.graph import END, StateGraph, add_messages
 from langsmith import Client as LangsmithClient
-from langchain_community.utilities import DuckDuckGoSearchRun
+from langchain_community.utilities.duckduckgo_search import DuckDuckGoSearchAPIWrapper
 
 from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
@@ -423,7 +423,7 @@ def route_to_response_synthesizer(
 def web_search_documents(state: AgentState) -> AgentState:
     """当数据库检索无结果时，使用搜索引擎获取信息"""
     if not state["documents"]:  # 如果数据库检索无结果
-        search = DuckDuckGoSearchRun()
+        search = DuckDuckGoSearchAPIWrapper()
         messages = convert_to_messages(state["messages"])
         query = messages[-1].content
         
