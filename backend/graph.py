@@ -463,7 +463,7 @@ workflow.add_node("response_synthesizer", synthesize_response_default)
 workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
 
 # set entry point to stock symbol check
-workflow.set_entry_point("stock_symbol_check",route_after_stock_check,
+workflow.set_entry_point("stock_symbol_check",route_to_retriever,
     {
         "web_search": "web_search",
         "retriever": "retriever",
