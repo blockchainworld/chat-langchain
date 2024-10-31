@@ -34,18 +34,20 @@ from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
 from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
 
-from typing import Literal
-from langchain_community.tools import DuckDuckGoSearchRun
-
 
 RESPONSE_TEMPLATE = """
 You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
 
-Generate a comprehensive and informative answer of 300 words or less for the given question based on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
+Generate a comprehensive and informative answer of 260 words or less for the given question based solely on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
+
+Strictly maintain the length limit of 260 words/characters.
+
+IMPORTANT: 
+- For Chinese responses: Your answer MUST NOT exceed 320 characters. Keep responses focused and informative.
 
 You should use bullet points in your answer for readability. Put citations where they apply rather than putting them all at the end.
 
-If there is nothing in the context relevant to the question at hand, try your best to create an answer based on your own knowledge as a stock, finance, and crypto expert.
+If there is nothing in the context relevant to the question at hand, try your best to create an answer based on your own knowledge as a stock, finance, and crypto expert, but add a note at the end stating: "Note: This response is based on the AI's own knowledge as a stock, finance, and crypto expert, as no relevant information was found in the provided context."
 
 If the input question is in Chinese, respond in Chinese. If the input question is in English, respond in English.
 
@@ -60,7 +62,6 @@ Anything between the following context html blocks is retrieved from a knowledge
 REMEMBER: If there is no relevant information within the context, create an answer based on your own knowledge as a stock, finance, and crypto expert and include the note about the source of the information. Anything between the preceding 'context' html blocks is retrieved from a knowledge bank, not part of the conversation with the user.
 
 如果输入的问题是中文,请用中文回答。如果输入的问题是英文,请用英文回答。
-
 """
 
 COHERE_RESPONSE_TEMPLATE = """\
@@ -279,11 +280,9 @@ def retrieve_documents_with_chat_history(
 
 def route_to_retriever(
     state: AgentState,
-) -> Literal["web_search","retriever", "retriever_with_chat_history"]:
+) -> Literal["retriever", "retriever_with_chat_history"]:
     # at this point in the graph execution there is exactly one (i.e. first) message from the user,
     # so use basic retriever without chat history
-    if not state.get("documents", []):
-        return "web_search"
     if len(state["messages"]) == 1:
         return "retriever"
     else:
@@ -409,29 +408,6 @@ def route_to_response_synthesizer(
     else:
         return "response_synthesizer"
 
-# 添加新的搜索引擎节点函数
-def web_search_documents(state: AgentState) -> AgentState:
-    """当数据库检索无结果时，使用搜索引擎获取信息"""
-    if not state["documents"]:  # 如果数据库检索无结果
-        search = DuckDuckGoSearchRun()
-        messages = convert_to_messages(state["messages"])
-        query = messages[-1].content
-        
-        # 执行网络搜索
-        search_results = search.run(query)
-        
-        # 将搜索结果转换为Document格式
-        web_documents = [
-            Document(
-                page_content=search_results,
-                metadata={"source": "web_search", "title": "Web Search Results"}
-            )
-        ]
-        
-        state["documents"] = web_documents
-    
-    return state
-
 
 class Configuration(TypedDict):
     model_name: str
@@ -446,7 +422,6 @@ workflow = StateGraph(AgentState, Configuration, input=InputSchema)
 
 # define nodes
 workflow.add_node("stock_symbol_check", check_stock_symbols)
-workflow.add_node("web_search", web_search_documents)
 workflow.add_node("retriever", retrieve_documents)
 workflow.add_node("retriever_with_chat_history", retrieve_documents_with_chat_history)
 workflow.add_node("response_synthesizer", synthesize_response_default)
@@ -456,20 +431,12 @@ workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
 workflow.set_entry_point("stock_symbol_check")
 
 # connect stock symbol check to retrievers
-workflow.add_conditional_edges("stock_symbol_check", route_to_retriever,{
-        "web_search": "web_search",
-        "retriever": "retriever",
-        "retriever_with_chat_history": "retriever_with_chat_history"
-    })
+workflow.add_conditional_edges("stock_symbol_check", route_to_retriever)
 
 # connect retrievers and response synthesizers
 workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
 workflow.add_conditional_edges(
     "retriever_with_chat_history", route_to_response_synthesizer
-)
-workflow.add_conditional_edges(
-    "web_search",
-    route_to_response_synthesizer
 )
 
 # connect synthesizers to terminal node
