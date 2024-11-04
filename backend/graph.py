@@ -30,6 +30,7 @@ from langchain_weaviate import WeaviateVectorStore
 from langgraph.graph import END, StateGraph, add_messages
 from langsmith import Client as LangsmithClient
 from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
+from langchain_community.tools import TavilySearchResults
 
 from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
@@ -435,55 +436,28 @@ def route_to_response_synthesizer(
 
 # 添加新的搜索引擎节点函数
 def web_search_documents(state: AgentState) -> AgentState:
-    try:
-        messages = convert_to_messages(state["messages"])
-        query = messages[-1].content
-        # 设置查询到状态中
-        state["query"] = query
-        
-        search = TavilySearchAPIWrapper(
-            tavily_api_key=TAVILY_API_KEY,
-            search_depth="advanced",
-            max_results=5
-        )
-        
-        search_results = search.run(query)
-        if not search_results:
-            print("No web search results found")
-            state["documents"] = []
-            return state
-            
-        web_documents = []
-        for result in search_results:
-            content = ""
-            if result.get('title'):
-                content += f"Title: {result['title']}\n"
-            if result.get('content'):
-                content += f"Content: {result['content']}\n"
-            if result.get('url'):
-                content += f"URL: {result['url']}\n"
-            if result.get('answer'):
-                content += f"Answer: {result['answer']}"
-            
-            web_documents.append(
-                Document(
-                    page_content=content,
-                    metadata={
-                        "source": "web_search",
-                        "title": result.get('title', ''),
-                        "url": result.get('url', ''),
-                        "answer": result.get('answer', '')
-                    }
-                )
-            )
-        
-        state["documents"] = web_documents
-        return state
-        
-    except Exception as e:
-        print(f"Web search error: {str(e)}")
-        state["documents"] = []
-        return state
+
+    messages = convert_to_messages(state["messages"])
+    query = messages[-1].content
+
+    
+    tool = TavilySearchResults(
+        max_results=5,
+        search_depth="advanced",
+        include_answer=True,
+        include_raw_content=True,
+        include_images=True,
+        # include_domains=[...],
+        # exclude_domains=[...],
+        # name="...",            # overwrite default tool name
+        # description="...",     # overwrite default tool description
+        # args_schema=...,       # overwrite default args_schema: BaseModel
+    )
+
+    result = tool.invoke({"query": query})
+
+    state["documents"] = result[0]['content']
+    return state
 
 
 class Configuration(TypedDict):
