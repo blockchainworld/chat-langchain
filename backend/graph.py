@@ -403,7 +403,7 @@ def synthesize_response_cohere(state: AgentState, config: RunnableConfig) -> Age
 def route_to_response_synthesizer(
     state: AgentState, config: RunnableConfig
 ) -> Literal["response_synthesizer", "response_synthesizer_cohere"]:
-    model_name = config.get("configurable", {}).get("model_name", OPENAI_MODEL_KEY)
+    model_name = config.get("configurable", {}).get("model_name", GPT_4O_MODEL_KEY)
     if model_name == COHERE_MODEL_KEY:
         return "response_synthesizer_cohere"
     else:
