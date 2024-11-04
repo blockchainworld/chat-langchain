@@ -1,800 +1,447 @@
-"use client";
+import contextlib
+import os
+from collections import defaultdict
+from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict
 
-import React, { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "react-toastify";
-import { useRouter, useSearchParams } from "next/navigation";
-import "highlight.js/styles/gradient-dark.css";
-import "react-toastify/dist/ReactToastify.css";
-import { DeleteIcon } from "@chakra-ui/icons";
-import {
-  Heading,
-  Flex,
-  IconButton,
-  InputGroup,
-  InputRightElement,
-  Spinner,
-  Button,
-  Text,
-  Box,
-  useBreakpointValue,
-  VStack,
-} from "@chakra-ui/react";
-import { ArrowDownIcon, ArrowUpIcon, SmallCloseIcon, HamburgerIcon, InfoOutlineIcon, CloseIcon } from "@chakra-ui/icons";
-import { Select, Link } from "@chakra-ui/react";
-import { Client } from "@langchain/langgraph-sdk";
-import { v4 as uuidv4 } from "uuid";
+import weaviate
+from langchain_anthropic import ChatAnthropic
+from langchain_cohere import ChatCohere
+from langchain_core.documents import Document
+from langchain_core.language_models import LanguageModelLike
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    BaseMessage,
+    HumanMessage,
+    convert_to_messages,
+)
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    PromptTemplate,
+)
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import ConfigurableField, RunnableConfig, ensure_config
+from langchain_fireworks import ChatFireworks
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
+from langchain_weaviate import WeaviateVectorStore
+from langgraph.graph import END, StateGraph, add_messages
+from langsmith import Client as LangsmithClient
 
-import { EmptyState } from "./EmptyState";
-import { ChatMessageBubble } from "./ChatMessageBubble";
-import { ChatList } from "./ChatList";
-import { AutoResizeTextarea } from "./AutoResizeTextarea";
-import { Message } from "../types";
-import { useThread } from "../hooks/useThread";
-import { useThreadList } from "../hooks/useThreadList";
-import { useThreadMessages } from "../hooks/useThreadMessages";
-import { useLangGraphClient } from "../hooks/useLangGraphClient";
-import { useStreamState } from "../hooks/useStreamState";
-import { useLocalStorage } from "../hooks/useLocalStorage";
-
-import { RegisterForm } from "./RegisterForm";
-import { AboutUs } from "./AboutUs";
-import { News } from "./News"
-import { RichMasterFunds } from "./RichMasterFunds";
-import { RichMasterAI } from "./RichMatserAI";
-import { PricingPlan } from "./PricingPlan";
-import { useTranslations, useLocale } from 'next-intl';
+from backend.constants import WEAVIATE_DOCS_INDEX_NAME
+from backend.ingest import get_embeddings_model
+from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
 
 
-const MODEL_TYPES = ["openai_gpt_4o_mini", "anthropic_claude_3_haiku","openai_gpt_4o"];
+RESPONSE_TEMPLATE = """
+You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
 
-// const defaultLlmValue =
-//   MODEL_TYPES[Math.floor(Math.random() * MODEL_TYPES.length)];
+Generate a comprehensive and informative answer of 320 words or less for the given question based solely on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
 
-const defaultLlmValue =
- "openai_gpt_4o";
+Strictly maintain the length limit of 320 words/characters.
 
-const getAssistantId = async (client: Client) => {
-  const response = await client.assistants.search({
-    metadata: null,
-    offset: 0,
-    limit: 10,
-    graphId: "chat",
-  });
-  if (response.length !== 1) {
-    throw Error(
-      `Expected exactly one assistant, got ${response.length} instead`,
-    );
-  }
-  return response[0]["assistant_id"];
-};
+IMPORTANT: 
+- For Chinese responses: Your answer MUST NOT exceed 320 characters. Keep responses focused and informative.
 
+You should use bullet points in your answer for readability. Put citations where they apply rather than putting them all at the end.
 
-interface StockData {
-  name?: string;
-  value?: string | number;
-  symbol: string;
-  price: string | number;
-  change: string | number;
-}
+If there is nothing in the context relevant to the question at hand, try your best to create an answer based on your own knowledge as a stock, finance, and crypto expert.
 
-type SetStockDataFunction = React.Dispatch<React.SetStateAction<StockData[]>>;
+If the input question is in Chinese, respond in Chinese. If the input question is in English, respond in English.
 
+Anything between the following context html blocks is retrieved from a knowledge bank, not part of the conversation with the user.
 
-// Replace with your actual stock API URL and key
-const STOCK_API_URL = 'https://yfinance-fza5dthrg6dxd2c3.southeastasia-01.azurewebsites.net/api';
-const STOCK_API_KEY = 'STOCK_API_KEY';
+<context>
 
-const VALID_STOCK_SYMBOLS = ["DIA","NDX","SPY","AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "JPM", "V", "JNJ"];
+{context}
 
-// Initial mock data
-const initialMockStockData: StockData[] = [
-  { name: "Dow Jones", value: "34,721.91", change: "+0.50%", symbol: "DIA", price: "34,721.91" },
-  { name: "NASDAQ-100", value: "15,785.32", change: "-0.15%", symbol: "NDX", price: "15,785.32" },
-  { name: "S&P 500", value: "4,509.23", change: "+0.20%", symbol: "SPY", price: "4,509.23" },
-  { symbol: "AAPL", price: "150.25", change: "+1.25%" },
-  { symbol: "MSFT", price: "305.15", change: "+0.75%" },
-  { symbol: "GOOGL", price: "2750.80", change: "-0.20%" },
-  { symbol: "AMZN", price: "3380.45", change: "+1.50%" },
-];
+<context/>
 
-const fetchStockDataFromApi = async (symbol: string): Promise<StockData | null> => {
-  try {
-    const response = await fetch(`${STOCK_API_URL}/stock?symbol=${symbol}`, {
-      method: 'GET',
-      headers: {
-        'X-API-KEY': STOCK_API_KEY,
-        'Content-Type': 'application/json',
-      },
-    });
+REMEMBER: If there is no relevant information within the context, create an answer based on your own knowledge as a stock, finance, and crypto expert and include the note about the source of the information. Anything between the preceding 'context' html blocks is retrieved from a knowledge bank, not part of the conversation with the user.
 
-    if (!response.ok) throw new Error('Network response was not ok');
+如果输入的问题是中文,请用中文回答。如果输入的问题是英文,请用英文回答。
+"""
 
-    const data = await response.json();
-    return {
-      symbol: data.symbol,
-      price: data.currentPrice || data.fiftyDayAverage || 'N/A',
-      change : (!isNaN(parseFloat(data.currentPrice)) && !isNaN(parseFloat(data.previousClose)))
-      ? `${(((parseFloat(data.currentPrice) - parseFloat(data.previousClose)) / parseFloat(data.previousClose)) * 100).toFixed(2)}%`
-      : (!isNaN(parseFloat(data.fiftyDayAverage)) && !isNaN(parseFloat(data.previousClose)))
-      ? `${(((parseFloat(data.fiftyDayAverage) - parseFloat(data.previousClose)) / parseFloat(data.previousClose)) * 100).toFixed(2)}%`
-      : 'N/A',
-    };
-  } catch (error) {
-    console.error('Fetch stock data failed:', error);
-    return null;
-  }
-};
+COHERE_RESPONSE_TEMPLATE = """\
+You are an expert programmer and problem-solver, tasked with answering any question \
+about Langchain.
 
-// Function to update stock data
-const fetchAndUpdateStockData = async (setStockData: SetStockDataFunction) => {
-  const updates = await Promise.all(
-    VALID_STOCK_SYMBOLS.map(async symbol => {
-      const data = await fetchStockDataFromApi(symbol);
-      return data || { symbol, price: 'N/A', change: 'N/A' };
-    })
-  );
-  
-  setStockData(prevData => [
-   // ...prevData.slice(0, 3),  // Keep the first 3 items (market indices)
-    ...updates
-  ]);
-};
+Generate a comprehensive and informative answer of 80 words or less for the \
+given question based solely on the provided search results (URL and content). You must \
+only use information from the provided search results. Use an unbiased and \
+journalistic tone. Combine search results together into a coherent answer. Do not \
+repeat text. Cite search results using [${{number}}] notation. Only cite the most \
+relevant results that answer the question accurately. Place these citations at the end \
+of the sentence or paragraph that reference them - do not put them all at the end. If \
+different results refer to different entities within the same name, write separate \
+answers for each entity.
+
+You should use bullet points in your answer for readability. Put citations where they apply
+rather than putting them all at the end.
+
+If there is nothing in the context relevant to the question at hand, just say "Hmm, \
+I'm not sure." Don't try to make up an answer.
+
+REMEMBER: If there is no relevant information within the context, just say "Hmm, I'm \
+not sure." Don't try to make up an answer. Anything between the preceding 'context' \
+html blocks is retrieved from a knowledge bank, not part of the conversation with the \
+user.\
+"""
+
+REPHRASE_TEMPLATE = """\
+Given the following conversation and a follow up question, rephrase the follow up \
+question to be a standalone question.
+
+Chat History:
+{chat_history}
+Follow Up Input: {question}
+Standalone Question:"""
 
 
-interface StockPanelProps {
-  isVisible: boolean;
-  onClose: () => void;
-}
+OPENAI_MODEL_KEY = "openai_gpt_4o_mini"
+ANTHROPIC_MODEL_KEY = "anthropic_claude_3_haiku"
+FIREWORKS_MIXTRAL_MODEL_KEY = "fireworks_mixtral"
+GOOGLE_MODEL_KEY = "google_gemini_pro"
+COHERE_MODEL_KEY = "cohere_command"
+GROQ_LLAMA_3_MODEL_KEY = "groq_llama_3"
+# Not exposed in the UI
+GPT_4O_MODEL_KEY = "openai_gpt_4o"
+CLAUDE_35_SONNET_MODEL_KEY = "anthropic_claude_3_5_sonnet"
 
-const StockPanel: React.FC<StockPanelProps> = ({ isVisible, onClose }) => {
-  const [stockData, setStockData] = useState<StockData[]>(initialMockStockData);
-
-  useEffect(() => {
-    fetchAndUpdateStockData(setStockData);
-
-    const intervalId = setInterval(() => fetchAndUpdateStockData(setStockData), 3000);
-
-    return () => clearInterval(intervalId);
-  }, []);
-
-    const getColorForChange = (change: string | number) => {
-    if (typeof change === 'string') {
-      const numericChange = parseFloat(change.replace('%', ''));
-      return numericChange > 0 ? "green.300" : "red.300";
-    }
-    return "gray.300"; // Default color when change value is not a string
-  };
-
-   const formatChange = (change: string | number) => {
-    if (typeof change === 'string') {
-      const numericChange = parseFloat(change.replace('%', ''));
-      return numericChange > 0 ? `+${change}` : change;
-    }
-    return change;
-  };
-  const t = useTranslations('HomePage');
-  const locale = useLocale();
-  return (
-    <Box
-      position="fixed"
-      right="0"
-      top="0"
-      bottom="0"
-      width="300px"
-      bg="#2D3748"
-      p={4}
-      overflowY="auto"
-      transform={isVisible ? "translateX(0)" : "translateX(100%)"}
-      transition="transform 0.3s"
-      zIndex="5"
-    >
-      <Flex justify="space-between" align="center" mb={4}>
-        <Heading size="md" color="white">{t('Stock Info')}</Heading>
-        <IconButton
-          icon={<CloseIcon />}
-          onClick={onClose}
-          aria-label="Close stock panel"
-          size="sm"
-          variant="ghost"
-          color="white"
-        />
-      </Flex>
-      <VStack align="stretch" spacing={4}>
-        <Box>
-          <Heading size="sm" color="white" mb={2}>{t('Market Indices')}</Heading>
-          {stockData.slice(0, 3).map((index) => (
-            <Flex key={index.name} justify="space-between" color="white">
-              <Text width="30%" textAlign="left">{index.symbol}</Text>
-              <Text width="40%" textAlign="center">{index.price}</Text>
-              <Text width="30%" textAlign="right" color={getColorForChange(index.change)}>{formatChange(index.change)}</Text>
-            </Flex>
-          ))}
-        </Box>
-        <Box>
-          <Heading size="sm" color="white" mb={2}>{t('Popular Stocks')}</Heading>
-          {stockData.slice(3).map((stock) => (
-            <Flex key={stock.symbol} justify="space-between" color="white">
-              <Text width="30%" textAlign="left">{stock.symbol}</Text>
-              <Text width="40%" textAlign="center">{stock.price}</Text>
-              <Text width="30%" textAlign="right" color={getColorForChange(stock.change)}>{formatChange(stock.change)}</Text>
-            </Flex>
-          ))}
-        </Box>
-      </VStack>
-    </Box>
-  );
-};
+FEEDBACK_KEYS = ["user_score", "user_click"]
 
 
-export function ChatWindow() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const locale = useLocale();
-  const t = useTranslations('HomePage');
+def update_documents(
+    _: list[Document], right: list[Document] | list[dict]
+) -> list[Document]:
+    res: list[Document] = []
 
-  const messageContainerRef = useRef<HTMLDivElement | null>(null);
-  const newestMessageRef = useRef<HTMLDivElement>(null);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [llm, setLlm] = useState(
-    searchParams.get("llm") ?? "openai_gpt_4o",
-  );
-  const [llmIsLoading, setLlmIsLoading] = useState(true);
-  const [assistantId, setAssistantId] = useState<string>("");
-  const [userId, setUserId] = useLocalStorage("userId", null);
-  const [isChatListVisible, setIsChatListVisible] = useState(false);
-  const [isStockPanelVisible, setIsStockPanelVisible] = useState(false);
+    for item in right:
+        if isinstance(item, dict):
+            res.append(Document(**item))
+        elif isinstance(item, Document):
+            res.append(item)
+        else:
+            raise TypeError(f"Got unknown document type '{type(item)}'")
+    return res
 
-  const isMobile = useBreakpointValue({ base: true, md: false });
 
-  const client = useLangGraphClient();
+class AgentState(TypedDict):
+    query: str
+    documents: Annotated[list[Document], update_documents]
+    messages: Annotated[list[AnyMessage], add_messages]
+    # for convenience in evaluations
+    answer: str
+    feedback_urls: dict[str, list[str]]
+    stock_data: Optional[list[dict]]  # New field
 
-  const { currentThread } = useThread(userId);
-  const {
-    threads,
-    createThread,
-    updateThread,
-    deleteThread,
-    loadMoreThreads,
-    areThreadsLoading,
-  } = useThreadList(userId);
-  const { streamStates, startStream, stopStream } = useStreamState();
-  const streamState =
-    currentThread == null
-      ? null
-      : streamStates[currentThread.thread_id] ?? null;
-  const { refreshMessages, messages, setMessages, next, areMessagesLoading } =
-    useThreadMessages(
-      currentThread?.thread_id ?? null,
-      streamState,
-      stopStream,
-    );
 
-  const scrollToNewestMessage = useCallback(() => {
-    if (newestMessageRef.current) {
-      newestMessageRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, []);
+gpt_4o_mini = ChatOpenAI(model="gpt-4o-mini-2024-07-18", temperature=0, streaming=True)
 
-  useEffect(() => {
-    if (messages.length > 0) {
-      scrollToNewestMessage();
-    }
-  }, [messages, scrollToNewestMessage]);
+claude_3_haiku = ChatAnthropic(
+    model="claude-3-haiku-20240307",
+    temperature=0,
+    max_tokens=4096,
+    anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", "not_provided"),
+)
+fireworks_mixtral = ChatFireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0,
+    max_tokens=16384,
+    fireworks_api_key=os.environ.get("FIREWORKS_API_KEY", "not_provided"),
+)
+gemini_pro = ChatGoogleGenerativeAI(
+    model="gemini-pro",
+    temperature=0,
+    max_output_tokens=16384,
+    convert_system_message_to_human=True,
+    google_api_key=os.environ.get("GOOGLE_API_KEY", "not_provided"),
+)
+cohere_command = ChatCohere(
+    model="command",
+    temperature=0,
+    cohere_api_key=os.environ.get("COHERE_API_KEY", "not_provided"),
+)
+groq_llama3 = ChatGroq(
+    model="llama3-70b-8192",
+    temperature=0,
+    groq_api_key=os.environ.get("GROQ_API_KEY", "not_provided"),
+)
 
-  const setLanggraphInfo = async () => {
-    try {
-      const assistantId = await getAssistantId(client);
-      setAssistantId(assistantId);
-    } catch (e) {
-      toast.error("Could not load AI agent");
-    }
-  };
+# Not exposed in the UI
+gpt_4o = ChatOpenAI(model="gpt-4o-2024-08-06", temperature=0.3, streaming=True)
+claude_35_sonnet = ChatAnthropic(
+    model="claude-3-5-sonnet-20240620",
+    temperature=0.7,
+)
 
-  const setUserInfo = () => {
-    if (userId == null) {
-      const userId = uuidv4();
-      setUserId(userId);
-    }
-  };
-
-  useEffect(() => {
-    setLlm(searchParams.get("llm") ?? defaultLlmValue);
-    setUserInfo();
-    setLanggraphInfo();
-    setLlmIsLoading(false);
-  }, []);
-
-  const config = {
-    configurable: { model_name: llm },
-    tags: ["model:" + llm],
-  };
-
-  const getThreadName = (messageValue: string) =>
-    messageValue.length > 20 ? messageValue.slice(0, 20) + "..." : messageValue;
-
-  const renameThread = async (messageValue: string) => {
-    if (currentThread == null || messages.length > 1) {
-      return;
-    }
-    const threadName = getThreadName(messageValue);
-    await updateThread(currentThread["thread_id"], threadName);
-  };
-
-  const sendMessage = async (message?: string) => {
-    if (messageContainerRef.current) {
-      messageContainerRef.current.classList.add("grow");
-    }
-    if (isLoading) {
-      return;
-    }
-
-    const messageValue = message ?? input;
-    if (messageValue === "") return;
-
-    let thread = currentThread;
-    if (thread == null) {
-      const threadName = getThreadName(messageValue);
-      thread = await createThread(threadName);
-      insertUrlParam("threadId", thread["thread_id"]);
-    }
-
-    setInput("");
-    const formattedMessage: Message = {
-      id: Math.random().toString(),
-      content: messageValue,
-      type: "human",
-    };
-    setMessages((prevMessages) => [...prevMessages, formattedMessage]);
-    setIsLoading(true);
-
-    try {
-      await renameThread(messageValue);
-      await startStream(
-        [formattedMessage],
-        thread["thread_id"],
-        assistantId,
-        config,
-      );
-      await refreshMessages();
-      setIsLoading(false);
-    } catch (e) {
-      setIsLoading(false);
-      if (!(e instanceof DOMException && e.name == "AbortError")) {
-        throw e;
-      }
-    }
-  };
-
-  const sendInitialQuestion = async (question: string) => {
-    await sendMessage(question);
-  };
-
-  const continueStream = async (threadId: string) => {
-    try {
-      setIsLoading(true);
-      await startStream(null, threadId, assistantId, config);
-      setIsLoading(false);
-    } catch (e) {
-      setIsLoading(false);
-      if (!(e instanceof DOMException && e.name == "AbortError")) {
-        throw e;
-      }
-    }
-  };
-
-  const insertUrlParam = (key: string, value?: string) => {
-    const searchParams = new URLSearchParams(window.location.search);
-    searchParams.set(key, value ?? "");
-    const newUrl =
-      window.location.protocol +
-      "//" +
-      window.location.host +
-      window.location.pathname +
-      "?" +
-      searchParams.toString();
-    router.push(newUrl);
-  };
-
-  const selectThread = useCallback(
-    async (id: string | null) => {
-      // Reset registration state when selecting a chat thread
-      setIsRegistering(false);  // <-- Add this line to reset the registration state
-      setIsAboutUs(false);
-      setIsRichMasterFunds(false);
-      setIsRichMasterAI(false);
-      setIsPricingPlan(false);
-      setIsNews(false);
-      setIsPreviousChats(false)
-
-      if (!id) {
-        const thread = await createThread("New chat");
-        insertUrlParam("threadId", thread["thread_id"]);
-      } else {
-        insertUrlParam("threadId", id);
-      }
-      setIsChatListVisible(false);
+llm = gpt_4o.configurable_alternatives(
+    # This gives this field an id
+    # When configuring the end runnable, we can then use this id to configure this field
+    ConfigurableField(id="model_name"),
+    default_key=GPT_4O_MODEL_KEY,
+    **{
+        ANTHROPIC_MODEL_KEY: claude_3_haiku,
+        FIREWORKS_MIXTRAL_MODEL_KEY: fireworks_mixtral,
+        GOOGLE_MODEL_KEY: gemini_pro,
+        COHERE_MODEL_KEY: cohere_command,
+        GROQ_LLAMA_3_MODEL_KEY: groq_llama3,
+        OPENAI_MODEL_KEY: gpt_4o_mini,
+        CLAUDE_35_SONNET_MODEL_KEY: claude_35_sonnet,
     },
-    [setMessages, createThread, insertUrlParam],
-  );
+).with_fallbacks(
+    [
+        gpt_4o,
+        gpt_4o_mini,
+        claude_3_haiku,
+        fireworks_mixtral,
+        gemini_pro,
+        cohere_command,
+        groq_llama3,
+    ]
+)
 
-  const deleteThreadAndReset = async (id: string) => {
-    await deleteThread(id);
-    router.push(
-      window.location.protocol +
-        "//" +
-        window.location.host +
-        window.location.pathname,
-    );
-  };
 
-  const toggleChatList = () => setIsChatListVisible(!isChatListVisible);
-  const toggleStockPanel = () => setIsStockPanelVisible(!isStockPanelVisible);
+#for realtime stock info section
+def check_stock_symbols(state: AgentState) -> AgentState:
+    messages = convert_to_messages(state["messages"])
+    query = messages[-1].content
+    stock_data = extract_and_fetch_stock_data(query)
+    if stock_data:
+        state["stock_data"] = stock_data
+    return state
 
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [isAboutUs, setIsAboutUs] = useState(false);
-  const [isRichMasterFunds, setIsRichMasterFunds] = useState(false);
-  const [isRichMasterAI, setIsRichMasterAI] = useState(false);
-  const [isPricingPlan, setIsPricingPlan] = useState(false);
-  const [isPreviousChats, setIsPreviousChats] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isNews, setIsNews] = useState(false);
 
-  const enterRegister = useCallback(() => {
-    setIsRegistering(true);
-    setIsRichMasterFunds(false);
-    setIsRichMasterAI(false);
-    setIsPricingPlan(false);
-    setIsChatListVisible(false);
-    setIsNews(false);
-    setIsAboutUs(false);
-    setIsPreviousChats(false);
-  }, []);
 
-  const enterAboutUs = useCallback(() => {
-    setIsRegistering(false);
-    setIsRichMasterFunds(false);
-    setIsRichMasterAI(false);
-    setIsPricingPlan(false);
-    setIsAboutUs(true);
-    setIsChatListVisible(false);
-    setIsNews(false);
-    setIsPreviousChats(false);
-  }, []);
+@contextlib.contextmanager
+def get_retriever(k: Optional[int] = None) -> Iterator[BaseRetriever]:
+    with weaviate.connect_to_weaviate_cloud(
+        cluster_url=os.environ["WEAVIATE_URL"],
+        auth_credentials=weaviate.classes.init.Auth.api_key(
+            os.environ.get("WEAVIATE_API_KEY", "not_provided")
+        ),
+        skip_init_checks=True,
+    ) as weaviate_client:
+        store = WeaviateVectorStore(
+            client=weaviate_client,
+            index_name=WEAVIATE_DOCS_INDEX_NAME,
+            text_key="text",
+            embedding=get_embeddings_model(),
+            attributes=["source", "title"],
+        )
+        k = k or 6
+        yield store.as_retriever(search_kwargs=dict(k=k))
 
-  const enterRichMasterFunds = useCallback(() => {
-    setIsRegistering(false);
-    setIsRichMasterFunds(true);
-    setIsRichMasterAI(false);
-    setIsPricingPlan(false);
-    setIsAboutUs(false);
-    setIsChatListVisible(false);
-    setIsNews(false);
-    setIsPreviousChats(false);
-  }, []);
 
-  const enterRichMasterAI = useCallback(() => {
-    setIsRegistering(false);
-    setIsRichMasterFunds(false);
-    setIsRichMasterAI(true);
-    setIsPricingPlan(false);
-    setIsAboutUs(false);
-    setIsChatListVisible(false);
-    setIsNews(false);
-    setIsPreviousChats(false);
-  }, []);
+def format_docs(docs: Sequence[Document]) -> str:
+    formatted_docs = []
+    for i, doc in enumerate(docs):
+        doc_string = f"<doc id='{i}'>{doc.page_content}</doc>"
+        formatted_docs.append(doc_string)
+    return "\n".join(formatted_docs)
 
-  const enterPricingPlan = useCallback(() => {
-    setIsRegistering(false);
-    setIsRichMasterFunds(false);
-    setIsPricingPlan(true);
-    setIsRichMasterAI(false);
-    setIsAboutUs(false);
-    setIsChatListVisible(false);
-    setIsNews(false);
-    setIsPreviousChats(false);
-  }, []);
 
-    const enterPreviousChats = useCallback(() => {
-    setIsRegistering(false);
-    setIsRichMasterFunds(false);
-    setIsPricingPlan(false);
-    setIsRichMasterAI(false);
-    setIsAboutUs(false);
-    setIsPreviousChats(true);
-    setIsChatListVisible(false);
-    setIsNews(false);
-    setIsPreviousChats(true);
-  }, []);
+def retrieve_documents(
+    state: AgentState, *, config: Optional[RunnableConfig] = None
+) -> AgentState:
+    config = ensure_config(config)
+    messages = convert_to_messages(state["messages"])
+    query = messages[-1].content
+    with get_retriever(k=config["configurable"].get("k")) as retriever:
+        relevant_documents = retriever.invoke(query)
+    return {"query": query, "documents": relevant_documents}
 
-  
-  const enterNews = useCallback(() => {
-    setIsRegistering(false);
-    setIsRichMasterFunds(false);
-    setIsRichMasterAI(false);
-    setIsPricingPlan(false);
-    setIsAboutUs(false);
-    setIsNews(true);
-    setIsChatListVisible(false);
-    setIsPreviousChats(false);
-  }, []);
 
-  const handleBackToLogin = useCallback(() => {
-    setIsRegistering(false);
-    setIsRichMasterAI(true); // 确保切换到 RichMasterAI 组件
-  }, []);
+def retrieve_documents_with_chat_history(
+    state: AgentState, *, config: Optional[RunnableConfig] = None
+) -> AgentState:
+    config = ensure_config(config)
+    model = llm.with_config(tags=["nostream"])
 
-  const handleRegisterClick = useCallback(() => {
-    setIsRegistering(true);
-  }, []);
+    CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(REPHRASE_TEMPLATE)
+    condense_question_chain = (
+        CONDENSE_QUESTION_PROMPT | model | StrOutputParser()
+    ).with_config(
+        run_name="CondenseQuestion",
+    )
 
-  return (
-    <Flex direction="column" h="100vh" overflow="hidden" w="full">
-      {isMobile && (
-        <IconButton
-          aria-label="Toggle chat list"
-          icon={<HamburgerIcon />}
-          onClick={toggleChatList}
-          position="absolute"
-          top="4"
-          left="4"
-          zIndex="10"
-        />
-      )}
-      
-      <Flex direction={["column", "column", "row"]} h="full">
-        <Box
-          w={["full", "full", "212px"]}
-          minW={["auto", "auto", "212px"]}
-          pt={["4", "4", "36px"]}
-          px={["4", "4", "24px"]}
-          overflowY="auto"
-          position={["fixed", "fixed", "relative"]}
-          left="0"
-          top="0"
-          bottom="0"
-          bg="blue.800"
-          zIndex="5"
-          transform={[
-            isChatListVisible ? "translateX(0)" : "translateX(-100%)",
-            isChatListVisible ? "translateX(0)" : "translateX(-100%)",
-            "translateX(0)"
-          ]}
-          transition="transform 0.3s"
-        >
-          <ChatList
-            userId={userId}
-            threads={threads}
-            enterChat={selectThread}
-            deleteChat={deleteThreadAndReset}
-            areThreadsLoading={areThreadsLoading}
-            loadMoreThreads={loadMoreThreads}
-            enterRegister={enterRegister}
-            enterAboutUs={enterAboutUs}
-            enterNews={enterNews}
-            enterRichMasterFunds={enterRichMasterFunds}
-            enterRichMasterAI={enterRichMasterAI}
-            enterPricingPlan={enterPricingPlan}
-            enterPreviousChats={enterPreviousChats}
-          />
-        </Box>
+    messages = convert_to_messages(state["messages"])
+    query = messages[-1].content
+    with get_retriever(k=config["configurable"].get("k")) as retriever:
+        retriever_with_condensed_question = condense_question_chain | retriever
+        # NOTE: we're ignoring the last message here, as it's going to contain the most recent
+        # query and we don't want that to be included in the chat history
+        relevant_documents = retriever_with_condensed_question.invoke(
+            {"question": query, "chat_history": get_chat_history(messages[:-1])}
+        )
+    return {"query": query, "documents": relevant_documents}
 
-        <Flex direction="column" flex="1" overflow="hidden" w="full" pt={isMobile ? "12" : "4"}>
-          <Flex direction="column" alignItems="center" mb="4">
-            <Heading
-              fontSize={["xl", "2xl", "3xl"]}
-              fontWeight="medium"
-              mb="1"
-              color="white"
-              textAlign="center"
-            >
-              {t('RichMaster StockGPT')} 🪙  
-            </Heading>
-          </Flex>
-          <IconButton
-            aria-label="Toggle stock panel"
-            icon={<InfoOutlineIcon />}
-            onClick={toggleStockPanel}
-            position="absolute"
-            top="4"
-            right="4"
-            zIndex="10"
-          />
-          {isRegistering ? (
-            <RegisterForm  onBackToLogin={handleBackToLogin} />
-          ) : isRichMasterFunds ? (
-            <RichMasterFunds />
-          ) : isRichMasterAI ? (
-            <Box 
-            flex="1" 
-            overflowY="auto" 
-            px={4}
-            // 确保内容区域可以滚动
-            maxH="calc(100vh - 100px)" // 减去顶部导航和边距的高度
-            css={{
-              '&::-webkit-scrollbar': {
-                width: '4px',
-              },
-              '&::-webkit-scrollbar-track': {
-                width: '6px',
-              },
-              '&::-webkit-scrollbar-thumb': {
-                background: 'gray.500',
-                borderRadius: '24px',
-              },
-            }}
-          >
-            <RichMasterAI
-            onRegister={handleRegisterClick}
-          isAuthenticated={isAuthenticated}
-          setIsAuthenticated={setIsAuthenticated} />
-          </Box>
-          ) : isPricingPlan ? (
-            <PricingPlan />
-          ): isAboutUs ? (
-            <AboutUs />
-          ): isNews ? (
-            <News />
-          ): isPreviousChats ? (
-                        <Box flex="1" overflowY="auto" mb="2" maxH={["60vh", "60vh", "calc(100vh - 300px)"]} px={4}>
-              {threads?.length ? (
-                threads.map((thread, idx) => (
-                  <Fragment key={thread.thread_id}>
-                    <Box
-                      role="group"
-                      onClick={() => selectThread(thread.thread_id)}
-                      cursor="pointer"
-                      p={2}
-                      borderBottom="1px solid"
-                      borderColor="gray.700"
-                      backgroundColor={currentThread?.thread_id === thread.thread_id ? "gray.700" : "gray.800"}
-                      _hover={{ backgroundColor: "gray.700" }}
-                      position="relative"
-                      maxWidth="100%"
-                      overflow="hidden"
-                    >
-                      <Text
-  color="white"
-  whiteSpace="nowrap"
-  textOverflow="ellipsis"
-  overflow="hidden"
-  maxWidth="calc(100% - 28px)"
->
-  {thread.metadata && typeof thread.metadata.name === 'string' ? thread.metadata.name : "Untitled"}
-</Text>
-                      <DeleteIcon
-                        display="none"
-                        _groupHover={{ display: "block" }}
-                        position="absolute"
-                        right="12px"
-                        top="50%"
-                        transform="translateY(-50%)"
-                        cursor="pointer"
-                        color="gray.400"
-                        height="14px"
-                        width="14px"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm("Delete chat?")) {
-                            deleteThreadAndReset(thread.thread_id);
-                          }
-                        }}
-                      />
-                    </Box>
-                    {idx !== threads.length - 1 && <Box height="4px" />}
-                  </Fragment>
-                ))
-              ) : (
-                <Text color="gray.400" textAlign="center" mt={4}>
-                  {t('No previous chats found')} 
-                </Text>
-              )}
-            </Box>
-          
-          ): areMessagesLoading ? (
-            <Spinner alignSelf="center" my="2" />
-          ) : (
-            <Flex direction="column" flex="1" overflow="hidden">
-              <Box
-                ref={messageContainerRef}
-                flex="1"
-                overflowY="auto"
-                mb="2"
-                maxH={["60vh", "60vh", "calc(100vh - 300px)"]}
-                px={4}
-              >
-                {messages.length > 0 && currentThread != null ? (
-                  <Flex direction="column-reverse">
-                    {next.length > 0 && streamStates[currentThread.thread_id]?.status !== "inflight" && (
-                      <Button
-                        key="continue-button"
-                        backgroundColor="rgb(58, 58, 61)"
-                        _hover={{ backgroundColor: "rgb(78,78,81)" }}
-                        onClick={() => continueStream(currentThread["thread_id"])}
-                        mb="2"
-                      >
-                        <ArrowDownIcon color="white" mr="2" />
-                        <Text color="white">Click to continue</Text>
-                      </Button>
-                    )}
-                    {[...messages].reverse().map((m, index) => (
-                      <Box 
-                        key={m.id} 
-                        ref={index === 0 ? newestMessageRef : null}
-                      >
-                        <ChatMessageBubble
-                          message={{ ...m }}
-                          feedbackUrls={streamStates[currentThread.thread_id]?.feedbackUrls}
-                          aiEmoji="🦜"
-                          isMostRecent={index === 0}
-                          messageCompleted={!isLoading}
-                        />
-                      </Box>
-                    ))}
-                  </Flex>
-                ) : (
-                  <EmptyState onChoice={sendInitialQuestion} />
-                )}
-              </Box>
-              <Flex 
-                direction="column" 
-                alignItems="center" 
-                width="100%" 
-                maxW={["100%", "100%", "800px"]} 
-                mx="auto" 
-                mt="auto" 
-                pb={4}
-              >
-                <InputGroup size="md" alignItems="center" width="100%">
-                  <AutoResizeTextarea
-                    value={input}
-                    maxRows={5}
-                    mr="56px"
-                    placeholder={t('Discover stocks now')}
-                    textColor="white"
-                    borderColor="rgb(58, 58, 61)"
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage();
-                      } else if (e.key === "Enter" && e.shiftKey) {
-                        e.preventDefault();
-                        setInput(input + "\n");
-                      }
-                    }}
-                  />
-                  <InputRightElement h="full">
-                    <IconButton
-                      colorScheme="blue"
-                      rounded="full"
-                      aria-label="Send"
-                      icon={isLoading ? <SmallCloseIcon /> : <ArrowUpIcon />}
-                      type="submit"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        if (currentThread != null && isLoading) {
-                          stopStream?.(currentThread.thread_id);
-                        } else {
-                          sendMessage();
-                        }
-                      }}
-                    />
-                  </InputRightElement>
-                </InputGroup>
-                {messages.length === 0 && (
-                  <Text as="footer" textAlign="center" mt={2} color="white">
-                    {t('Start trading today')}
-                  </Text>
-                )}
-              </Flex>
-            </Flex>
-          )}
-        </Flex>
-      </Flex>
-{/*       { isStockPanelVisible &&  
-      <StockPanel  onClose={() => setIsStockPanelVisible(false)} />} */}
-      <StockPanel isVisible={isStockPanelVisible} onClose={() => setIsStockPanelVisible(false)} />
-    </Flex>
-  );
-}
+
+def route_to_retriever(
+    state: AgentState,
+) -> Literal["retriever", "retriever_with_chat_history"]:
+    # at this point in the graph execution there is exactly one (i.e. first) message from the user,
+    # so use basic retriever without chat history
+    if len(state["messages"]) == 1:
+        return "retriever"
+    else:
+        return "retriever_with_chat_history"
+
+
+def get_chat_history(messages: Sequence[BaseMessage]) -> Sequence[BaseMessage]:
+    chat_history = []
+    for message in messages:
+        if (isinstance(message, AIMessage) and not message.tool_calls) or isinstance(
+            message, HumanMessage
+        ):
+            chat_history.append({"content": message.content, "role": message.type})
+    return chat_history
+
+
+def get_feedback_urls(config: RunnableConfig) -> dict[str, list[str]]:
+    ls_client = LangsmithClient()
+    run_id = config["configurable"].get("run_id")
+    if run_id is None:
+        return {}
+
+    tokens = ls_client.create_presigned_feedback_tokens(run_id, FEEDBACK_KEYS)
+    key_to_token_urls = defaultdict(list)
+
+    for token_idx, token in enumerate(tokens):
+        key_idx = token_idx % len(FEEDBACK_KEYS)
+        key = FEEDBACK_KEYS[key_idx]
+        key_to_token_urls[key].append(token.url)
+    return key_to_token_urls
+
+
+
+def synthesize_response_old(
+    state: AgentState,
+    config: RunnableConfig,
+    model: LanguageModelLike,
+    prompt_template: str,
+) -> AgentState:
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", prompt_template),
+            ("placeholder", "{chat_history}"),
+            ("human", "{question}"),
+        ]
+    )
+    response_synthesizer = prompt | model
+    synthesized_response = response_synthesizer.invoke(
+        {
+            "question": state["query"],
+            "context": format_docs(state["documents"]),
+            # NOTE: we're ignoring the last message here, as it's going to contain the most recent
+            # query and we don't want that to be included in the chat history
+            "chat_history": get_chat_history(
+                convert_to_messages(state["messages"][:-1])
+            ),
+        }
+    )
+    # finally, add feedback URLs so that users can leave feedback
+    feedback_urls = get_feedback_urls(config)
+    return {
+        "messages": [synthesized_response],
+        "answer": synthesized_response.content,
+        "feedback_urls": feedback_urls,
+    }
+
+def synthesize_response(
+    state: AgentState,
+    config: RunnableConfig,
+    model: LanguageModelLike,
+    prompt_template: str,
+) -> AgentState:
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", prompt_template),
+            ("placeholder", "{chat_history}"),
+            ("human", "{question}"),
+        ]
+    )
+    response_synthesizer = prompt | model
+    
+    # Include stock data in the context if available
+    context = format_docs(state["documents"])
+    if "stock_data" in state and state["stock_data"]:
+        stock_info = format_stock_info(state["stock_data"])
+        context = stock_info + "\n" + context
+
+    synthesized_response = response_synthesizer.invoke(
+        {
+            "question": state["query"],
+            "context": context,
+            "chat_history": get_chat_history(
+                convert_to_messages(state["messages"][:-1])
+            ),
+        }
+    )
+    feedback_urls = get_feedback_urls(config)
+    return {
+        "messages": [synthesized_response],
+        "answer": synthesized_response.content,
+        "feedback_urls": feedback_urls,
+    }
+
+
+
+def synthesize_response_default(
+    state: AgentState, config: RunnableConfig
+) -> AgentState:
+    return synthesize_response(state, config, llm, RESPONSE_TEMPLATE)
+
+
+def synthesize_response_cohere(state: AgentState, config: RunnableConfig) -> AgentState:
+    model = llm.bind(documents=state["documents"])
+    return synthesize_response(state, config, model, COHERE_RESPONSE_TEMPLATE)
+
+
+def route_to_response_synthesizer(
+    state: AgentState, config: RunnableConfig
+) -> Literal["response_synthesizer", "response_synthesizer_cohere"]:
+    model_name = config.get("configurable", {}).get("model_name", GPT_4O_MODEL_KEY)
+    if model_name == COHERE_MODEL_KEY:
+        return "response_synthesizer_cohere"
+    else:
+        return "response_synthesizer"
+
+
+class Configuration(TypedDict):
+    model_name: str
+    k: int
+
+
+class InputSchema(TypedDict):
+    messages: list[AnyMessage]
+
+
+workflow = StateGraph(AgentState, Configuration, input=InputSchema)
+
+# define nodes
+workflow.add_node("stock_symbol_check", check_stock_symbols)
+workflow.add_node("retriever", retrieve_documents)
+workflow.add_node("retriever_with_chat_history", retrieve_documents_with_chat_history)
+workflow.add_node("response_synthesizer", synthesize_response_default)
+workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
+
+# set entry point to stock symbol check
+workflow.set_entry_point("stock_symbol_check")
+
+# connect stock symbol check to retrievers
+workflow.add_conditional_edges("stock_symbol_check", route_to_retriever)
+
+# connect retrievers and response synthesizers
+workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
+workflow.add_conditional_edges(
+    "retriever_with_chat_history", route_to_response_synthesizer
+)
+
+# connect synthesizers to terminal node
+workflow.add_edge("response_synthesizer", END)
+workflow.add_edge("response_synthesizer_cohere", END)
+
+graph = workflow.compile()
