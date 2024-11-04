@@ -251,14 +251,20 @@ def retrieve_documents(
     config = ensure_config(config)
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
+    
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
         # 如果没有找到相关文档，设置为空列表
         if not relevant_documents:
             print("No relevant documents found in retriever")
-            return {"query": query, "documents": []}
-    return {"query": query, "documents": relevant_documents}
-
+            
+        # 保持原始状态中的其他字段不变
+        new_state = state.copy()
+        new_state["query"] = query
+        new_state["documents"] = relevant_documents if relevant_documents else []
+        return new_state
+        
+    return state
 
 def retrieve_documents_with_chat_history(
     state: AgentState, *, config: Optional[RunnableConfig] = None
@@ -447,7 +453,7 @@ def web_search_documents(state: AgentState) -> AgentState:
             content = f"Title: {result.get('title', '')}\n"
             content += f"Content: {result.get('content', '')}\n"
             content += f"URL: {result.get('url', '')}"
-            content += f"URL: {answer.get('answer', '')}"
+            content += f"Answer: {answer.get('answer', '')}"
             
             web_documents.append(
                 Document(
