@@ -439,6 +439,7 @@ def web_search_documents(state: AgentState) -> AgentState:
 
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
+    state["query"] = query
 
     
     tool = TavilySearchResults(
