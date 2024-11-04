@@ -374,20 +374,21 @@ def synthesize_response(
     model: LanguageModelLike,
     prompt_template: str,
 ) -> AgentState:
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", prompt_template),
-            ("placeholder", "{chat_history}"),
-            ("human", "{question}"),
-        ]
-    )
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", prompt_template),
+        ("placeholder", "{chat_history}"),
+        ("human", "{question}"),
+    ])
     response_synthesizer = prompt | model
 
+    # 先创建基础 context
+    context = format_docs(state["documents"])
+    
+    # 检查是否是 web search 结果
     if state.get("documents") and state["documents"][0].metadata.get("source") == "web_search":
        context = "Information from web search:\n" + context
     
-    # Include stock data in the context if available
-    context = format_docs(state["documents"])
+    # 添加股票数据
     if "stock_data" in state and state["stock_data"]:
         stock_info = format_stock_info(state["stock_data"])
         context = stock_info + "\n" + context
@@ -406,8 +407,10 @@ def synthesize_response(
         "messages": [synthesized_response],
         "answer": synthesized_response.content,
         "feedback_urls": feedback_urls,
+        "query": state["query"],               # 保持状态
+        "documents": state["documents"],       # 保持状态
+        "stock_data": state.get("stock_data")  # 保持状态
     }
-
 
 
 def synthesize_response_default(
