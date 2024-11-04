@@ -253,6 +253,10 @@ def retrieve_documents(
     query = messages[-1].content
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
+        # 如果没有找到相关文档，设置为空列表
+        if not relevant_documents:
+            print("No relevant documents found in retriever")
+            return {"query": query, "documents": []}
     return {"query": query, "documents": relevant_documents}
 
 
