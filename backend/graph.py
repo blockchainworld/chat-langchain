@@ -29,16 +29,10 @@ from langchain_openai import ChatOpenAI
 from langchain_weaviate import WeaviateVectorStore
 from langgraph.graph import END, StateGraph, add_messages
 from langsmith import Client as LangsmithClient
-from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
 
 from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
 from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
-
-import asyncio
-
-# 禁用 uvloop
-asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
 
 RESPONSE_TEMPLATE = """
@@ -53,7 +47,7 @@ IMPORTANT:
 
 You should use bullet points in your answer for readability. Put citations where they apply rather than putting them all at the end.
 
-If there is nothing in the context relevant to the question at hand, try your best to create an answer based on your own knowledge as a stock, finance, and crypto expert, but add a note at the end stating: "Note: This response is based on the AI's own knowledge as a stock, finance, and crypto expert, as no relevant information was found in the provided context."
+If there is nothing in the context relevant to the question at hand, try your best to create an answer based on your own knowledge as a stock, finance, and crypto expert.
 
 If the input question is in Chinese, respond in Chinese. If the input question is in English, respond in English.
 
@@ -118,7 +112,6 @@ CLAUDE_35_SONNET_MODEL_KEY = "anthropic_claude_3_5_sonnet"
 
 FEEDBACK_KEYS = ["user_score", "user_click"]
 
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "not_provided")
 
 def update_documents(
     _: list[Document], right: list[Document] | list[dict]
@@ -288,11 +281,9 @@ def retrieve_documents_with_chat_history(
 
 def route_to_retriever(
     state: AgentState,
-) -> Literal["web_search","retriever", "retriever_with_chat_history"]:
+) -> Literal["retriever", "retriever_with_chat_history"]:
     # at this point in the graph execution there is exactly one (i.e. first) message from the user,
     # so use basic retriever without chat history
-    if not state.get("documents", []):  # 如果没有文档，使用web搜索
-        return "web_search"
     if len(state["messages"]) == 1:
         return "retriever"
     else:
@@ -373,9 +364,6 @@ def synthesize_response(
         ]
     )
     response_synthesizer = prompt | model
-
-    if state.get("documents") and state["documents"][0].metadata.get("source") == "web_search":
-       context = "Information from web search:\n" + context
     
     # Include stock data in the context if available
     context = format_docs(state["documents"])
@@ -421,42 +409,6 @@ def route_to_response_synthesizer(
     else:
         return "response_synthesizer"
 
-# 添加新的搜索引擎节点函数
-def web_search_documents(state: AgentState) -> AgentState:
-    """当数据库检索无结果时，使用Tavily搜索引擎获取信息"""
-    try:
-        search = TavilySearchAPIWrapper(
-            tavily_api_key=os.environ.get("TAVILY_API_KEY"),
-            search_depth="advanced",  # 可以是 "basic" 或 "advanced"
-            max_results=5  # 可以调整结果数量
-        )
-        messages = convert_to_messages(state["messages"])
-        query = messages[-1].content
-        
-        # 执行Tavily搜索
-        search_results = search.run(query)
-        
-        # 将搜索结果转换为Document格式
-        web_documents = [
-            Document(
-                page_content=search_results,
-                metadata={
-                    "source": "web_search",
-                    "title": "Tavily Search Results"
-                }
-            )
-        ]
-        
-        state["documents"] = web_documents
-        print("Tavily Search completed successfully")
-        
-    except Exception as e:
-        print(f"Tavily Search error: {str(e)}")
-        # 搜索失败时返回空文档
-        state["documents"] = []
-    
-    return state
-
 
 class Configuration(TypedDict):
     model_name: str
@@ -471,7 +423,6 @@ workflow = StateGraph(AgentState, Configuration, input=InputSchema)
 
 # define nodes
 workflow.add_node("stock_symbol_check", check_stock_symbols)
-workflow.add_node("web_search", web_search_documents)
 workflow.add_node("retriever", retrieve_documents)
 workflow.add_node("retriever_with_chat_history", retrieve_documents_with_chat_history)
 workflow.add_node("response_synthesizer", synthesize_response_default)
@@ -488,9 +439,6 @@ workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
 workflow.add_conditional_edges(
     "retriever_with_chat_history", route_to_response_synthesizer
 )
-workflow.add_conditional_edges(
-    "web_search", 
-    route_to_response_synthesizer)
 
 # connect synthesizers to terminal node
 workflow.add_edge("response_synthesizer", END)
