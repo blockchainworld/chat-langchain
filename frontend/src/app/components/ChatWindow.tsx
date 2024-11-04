@@ -47,8 +47,11 @@ import { useTranslations, useLocale } from 'next-intl';
 
 const MODEL_TYPES = ["openai_gpt_4o_mini", "anthropic_claude_3_haiku","openai_gpt_4o"];
 
-const defaultLlmValue =
-  MODEL_TYPES[Math.floor(Math.random() * MODEL_TYPES.length)];
+// const defaultLlmValue =
+//   MODEL_TYPES[Math.floor(Math.random() * MODEL_TYPES.length)];
+
+ const defaultLlmValue =
+  "openai_gpt_4o";
 
 const getAssistantId = async (client: Client) => {
   const response = await client.assistants.search({
