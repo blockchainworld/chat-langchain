@@ -29,7 +29,7 @@ from langchain_openai import ChatOpenAI
 from langchain_weaviate import WeaviateVectorStore
 from langgraph.graph import END, StateGraph, add_messages
 from langsmith import Client as LangsmithClient
-from langchain_community.utilities.duckduckgo_search import DuckDuckGoSearchAPIWrapper
+from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
 
 from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
@@ -118,6 +118,7 @@ CLAUDE_35_SONNET_MODEL_KEY = "anthropic_claude_3_5_sonnet"
 
 FEEDBACK_KEYS = ["user_score", "user_click"]
 
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "not_provided")
 
 def update_documents(
     _: list[Document], right: list[Document] | list[dict]
@@ -422,24 +423,37 @@ def route_to_response_synthesizer(
 
 # 添加新的搜索引擎节点函数
 def web_search_documents(state: AgentState) -> AgentState:
-    """当数据库检索无结果时，使用搜索引擎获取信息"""
-    if not state["documents"]:  # 如果数据库检索无结果
-        search = DuckDuckGoSearchAPIWrapper()
+    """当数据库检索无结果时，使用Tavily搜索引擎获取信息"""
+    try:
+        search = TavilySearchAPIWrapper(
+            tavily_api_key=os.environ.get("TAVILY_API_KEY"),
+            search_depth="advanced",  # 可以是 "basic" 或 "advanced"
+            max_results=5  # 可以调整结果数量
+        )
         messages = convert_to_messages(state["messages"])
         query = messages[-1].content
         
-        # 执行网络搜索
+        # 执行Tavily搜索
         search_results = search.run(query)
         
         # 将搜索结果转换为Document格式
         web_documents = [
             Document(
                 page_content=search_results,
-                metadata={"source": "web_search", "title": "Web Search Results"}
+                metadata={
+                    "source": "web_search",
+                    "title": "Tavily Search Results"
+                }
             )
         ]
         
         state["documents"] = web_documents
+        print("Tavily Search completed successfully")
+        
+    except Exception as e:
+        print(f"Tavily Search error: {str(e)}")
+        # 搜索失败时返回空文档
+        state["documents"] = []
     
     return state
 
