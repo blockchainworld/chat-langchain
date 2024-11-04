@@ -39,9 +39,9 @@ from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
 RESPONSE_TEMPLATE = """
 You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
 
-Generate a comprehensive and informative answer of 260 words or less for the given question based solely on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
+Generate a comprehensive and informative answer of 300 words or less for the given question based solely on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
 
-Strictly maintain the length limit of 260 words/characters.
+Strictly maintain the length limit of 300 words/characters.
 
 IMPORTANT: 
 - For Chinese responses: Your answer MUST NOT exceed 320 characters. Keep responses focused and informative.
@@ -288,18 +288,15 @@ def retrieve_documents_with_chat_history(
 def route_to_retriever(
     state: AgentState,
 ) -> Literal["web_search", "retriever", "retriever_with_chat_history"]:
-    # 首先尝试本地检索
-    with get_retriever() as retriever:
-        messages = convert_to_messages(state["messages"])
-        query = messages[-1].content
-        documents = retriever.invoke(query)
+    messages = convert_to_messages(state["messages"])
     
-    # 如果本地检索没有结果，使用 web_search
-    if not documents:
+    # 如果已经有文档且为空，说明本地检索失败，使用 web_search
+    if "documents" in state and (not state["documents"] or len(state["documents"]) == 0):
+        print("No local documents found, routing to web_search")
         return "web_search"
     
-    # 如果有结果，根据消息长度决定使用哪种检索方式
-    if len(state["messages"]) == 1:
+    # 根据消息长度决定检索方式
+    if len(messages) == 1:
         return "retriever"
     else:
         return "retriever_with_chat_history"
@@ -429,36 +426,46 @@ def route_to_response_synthesizer(
 
 # 添加新的搜索引擎节点函数
 def web_search_documents(state: AgentState) -> AgentState:
-    """当数据库检索无结果时，使用Tavily搜索引擎获取信息"""
     try:
         search = TavilySearchAPIWrapper(
-            tavily_api_key=os.environ.get("TAVILY_API_KEY"),
-            search_depth="advanced",  # 可以是 "basic" 或 "advanced"
-            max_results=5  # 可以调整结果数量
+            tavily_api_key=TAVILY_API_KEY,
+            search_depth="advanced",
+            max_results=5
         )
-        messages = convert_to_messages(state["messages"])
-        query = messages[-1].content
+        query = state["query"]
         
-        # 执行Tavily搜索
         search_results = search.run(query)
-        
-        # 将搜索结果转换为Document格式
-        web_documents = [
-            Document(
-                page_content=search_results,
-                metadata={
-                    "source": "web_search",
-                    "title": "Tavily Search Results"
-                }
+        if not search_results:
+            print("No web search results found")
+            state["documents"] = []
+            return state
+            
+        # 处理搜索结果并保留结构化信息
+        web_documents = []
+        for result in search_results:
+            # Tavily 通常返回的结构包含 'title', 'content', 'url' 等字段
+            content = f"Title: {result.get('title', '')}\n"
+            content += f"Content: {result.get('content', '')}\n"
+            content += f"URL: {result.get('url', '')}"
+            content += f"URL: {answer.get('answer', '')}"
+            
+            web_documents.append(
+                Document(
+                    page_content=content,
+                    metadata={
+                        "source": "web_search",
+                        "title": result.get('title', ''),
+                        "url": result.get('url', '')
+                        "answer": result.get('answer', '')
+                    }
+                )
             )
-        ]
         
         state["documents"] = web_documents
-        print("Tavily Search completed successfully")
+        print(f"Web search completed successfully, found {len(web_documents)} results")
         
     except Exception as e:
-        print(f"Tavily Search error: {str(e)}")
-        # 搜索失败时返回空文档
+        print(f"Web search error: {str(e)}")
         state["documents"] = []
     
     return state
@@ -487,20 +494,41 @@ workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
 workflow.set_entry_point("stock_symbol_check")
 
 # connect stock symbol check to retrievers
-workflow.add_conditional_edges("stock_symbol_check", route_to_retriever)
-
-# 添加从 retriever 到 web_search 的条件边
-workflow.add_conditional_edges("retriever", route_to_retriever)
-workflow.add_conditional_edges("retriever_with_chat_history", route_to_retriever)
-
-# connect retrievers and response synthesizers
-workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
 workflow.add_conditional_edges(
-    "retriever_with_chat_history", route_to_response_synthesizer
+    "stock_symbol_check",
+    route_to_retriever,
+    {
+        "retriever": "retriever",
+        "retriever_with_chat_history": "retriever_with_chat_history",
+        "web_search": "web_search"
+    }
+)
+
+# 连接检索器到响应合成器
+workflow.add_conditional_edges(
+    "retriever",
+    route_to_response_synthesizer,
+    {
+        "response_synthesizer": "response_synthesizer",
+        "response_synthesizer_cohere": "response_synthesizer_cohere"
+    }
 )
 workflow.add_conditional_edges(
-    "web_search", 
-    route_to_response_synthesizer)
+    "retriever_with_chat_history",
+    route_to_response_synthesizer,
+    {
+        "response_synthesizer": "response_synthesizer",
+        "response_synthesizer_cohere": "response_synthesizer_cohere"
+    }
+)
+workflow.add_conditional_edges(
+    "web_search",
+    route_to_response_synthesizer,
+    {
+        "response_synthesizer": "response_synthesizer",
+        "response_synthesizer_cohere": "response_synthesizer_cohere"
+    }
+)
 
 # connect synthesizers to terminal node
 workflow.add_edge("response_synthesizer", END)
