@@ -188,7 +188,6 @@ llm = gpt_4o.configurable_alternatives(
         GOOGLE_MODEL_KEY: gemini_pro,
         COHERE_MODEL_KEY: cohere_command,
         GROQ_LLAMA_3_MODEL_KEY: groq_llama3,
-        GPT_4O_MODEL_KEY: gpt_4o,
         OPENAI_MODEL_KEY: gpt_4o_mini,
         CLAUDE_35_SONNET_MODEL_KEY: claude_35_sonnet,
     },
