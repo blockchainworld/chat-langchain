@@ -252,43 +252,43 @@ def retrieve_documents(
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
     
+    # 首先设置查询到状态中
+    state["query"] = query
+    
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
         # 如果没有找到相关文档，设置为空列表
         if not relevant_documents:
             print("No relevant documents found in retriever")
-            
-        # 保持原始状态中的其他字段不变
-        new_state = state.copy()
-        new_state["query"] = query
-        new_state["documents"] = relevant_documents if relevant_documents else []
-        return new_state
-        
+            state["documents"] = []
+        else:
+            state["documents"] = relevant_documents
+    
     return state
 
 def retrieve_documents_with_chat_history(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
     config = ensure_config(config)
-    model = llm.with_config(tags=["nostream"])
-
-    CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(REPHRASE_TEMPLATE)
-    condense_question_chain = (
-        CONDENSE_QUESTION_PROMPT | model | StrOutputParser()
-    ).with_config(
-        run_name="CondenseQuestion",
+    condense_question_chain = create_condense_question_chain(
+        llm,
+        "Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question."
     )
 
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
+    
+    # 设置查询到状态中
+    state["query"] = query
+    
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         retriever_with_condensed_question = condense_question_chain | retriever
-        # NOTE: we're ignoring the last message here, as it's going to contain the most recent
-        # query and we don't want that to be included in the chat history
         relevant_documents = retriever_with_condensed_question.invoke(
             {"question": query, "chat_history": get_chat_history(messages[:-1])}
         )
-    return {"query": query, "documents": relevant_documents}
+        state["documents"] = relevant_documents if relevant_documents else []
+    
+    return state
 
 
 def route_to_retriever(
@@ -433,12 +433,16 @@ def route_to_response_synthesizer(
 # 添加新的搜索引擎节点函数
 def web_search_documents(state: AgentState) -> AgentState:
     try:
+        messages = convert_to_messages(state["messages"])
+        query = messages[-1].content
+        # 设置查询到状态中
+        state["query"] = query
+        
         search = TavilySearchAPIWrapper(
             tavily_api_key=TAVILY_API_KEY,
             search_depth="advanced",
             max_results=5
         )
-        query = state["query"]
         
         search_results = search.run(query)
         if not search_results:
@@ -446,14 +450,17 @@ def web_search_documents(state: AgentState) -> AgentState:
             state["documents"] = []
             return state
             
-        # 处理搜索结果并保留结构化信息
         web_documents = []
         for result in search_results:
-            # Tavily 通常返回的结构包含 'title', 'content', 'url' 等字段
-            content = f"Title: {result.get('title', '')}\n"
-            content += f"Content: {result.get('content', '')}\n"
-            content += f"URL: {result.get('url', '')}"
-            content += f"Answer: {answer.get('answer', '')}"
+            content = ""
+            if result.get('title'):
+                content += f"Title: {result['title']}\n"
+            if result.get('content'):
+                content += f"Content: {result['content']}\n"
+            if result.get('url'):
+                content += f"URL: {result['url']}\n"
+            if result.get('answer'):
+                content += f"Answer: {result['answer']}"
             
             web_documents.append(
                 Document(
@@ -468,13 +475,12 @@ def web_search_documents(state: AgentState) -> AgentState:
             )
         
         state["documents"] = web_documents
-        print(f"Web search completed successfully, found {len(web_documents)} results")
+        return state
         
     except Exception as e:
         print(f"Web search error: {str(e)}")
         state["documents"] = []
-    
-    return state
+        return state
 
 
 class Configuration(TypedDict):
