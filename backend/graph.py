@@ -35,11 +35,6 @@ from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
 from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
 
-import asyncio
-
-# 禁用 uvloop
-asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-
 
 RESPONSE_TEMPLATE = """
 You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
