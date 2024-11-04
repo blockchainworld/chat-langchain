@@ -283,11 +283,18 @@ def retrieve_documents_with_chat_history(
 
 def route_to_retriever(
     state: AgentState,
-) -> Literal["web_search","retriever", "retriever_with_chat_history"]:
-    # at this point in the graph execution there is exactly one (i.e. first) message from the user,
-    # so use basic retriever without chat history
-    if not state.get("documents", []):  # 如果没有文档，使用web搜索
+) -> Literal["web_search", "retriever", "retriever_with_chat_history"]:
+    # 首先尝试本地检索
+    with get_retriever() as retriever:
+        messages = convert_to_messages(state["messages"])
+        query = messages[-1].content
+        documents = retriever.invoke(query)
+    
+    # 如果本地检索没有结果，使用 web_search
+    if not documents:
         return "web_search"
+    
+    # 如果有结果，根据消息长度决定使用哪种检索方式
     if len(state["messages"]) == 1:
         return "retriever"
     else:
