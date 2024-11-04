@@ -457,29 +457,27 @@ def web_search_documents(state: AgentState) -> AgentState:
     search_results = tool.invoke({"query": query})
 
     web_documents = []
-        for result in search_results:
-            content = ""
-            if result.get('content'):
-                content += f"Content: {result['content']}\n"
-            if result.get('url'):
-                content += f"URL: {result['url']}\n"
-            
-            web_documents.append(
-                Document(
-                    page_content=content,
-                    metadata={
-                        "source": "web_search",
-                        "title": result.get('title', ''),
-                        "url": result.get('url', ''),
-                    }
-                )
-            )
+    for result in search_results:
+        content = ""
+        if result.get('content'):
+            content += f"Content: {result['content']}\n"
+        if result.get('url'):
+            content += f"URL: {result['url']}\n"
         
-        state["documents"] = web_documents
-        return state
+        web_documents.append(
+            Document(
+                page_content=content,
+                metadata={
+                    "source": "web_search",
+                    "title": result.get('title', ''),
+                    "url": result.get('url', ''),
+                }
+            )
+        )
     
-    state["documents"] = result[0]['content']
+    state["documents"] = web_documents
     return state
+    
 
 
 class Configuration(TypedDict):
