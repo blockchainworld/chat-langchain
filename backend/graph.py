@@ -485,6 +485,10 @@ workflow.set_entry_point("stock_symbol_check")
 # connect stock symbol check to retrievers
 workflow.add_conditional_edges("stock_symbol_check", route_to_retriever)
 
+# 添加从 retriever 到 web_search 的条件边
+workflow.add_conditional_edges("retriever", route_to_retriever)
+workflow.add_conditional_edges("retriever_with_chat_history", route_to_retriever)
+
 # connect retrievers and response synthesizers
 workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
 workflow.add_conditional_edges(
