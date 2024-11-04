@@ -183,22 +183,23 @@ claude_35_sonnet = ChatAnthropic(
     temperature=0.7,
 )
 
-llm = gpt_4o_mini.configurable_alternatives(
+llm = gpt_4o.configurable_alternatives(
     # This gives this field an id
     # When configuring the end runnable, we can then use this id to configure this field
     ConfigurableField(id="model_name"),
-    default_key=OPENAI_MODEL_KEY,
+    default_key=GPT_4O_MODEL_KEY,
     **{
         ANTHROPIC_MODEL_KEY: claude_3_haiku,
         FIREWORKS_MIXTRAL_MODEL_KEY: fireworks_mixtral,
         GOOGLE_MODEL_KEY: gemini_pro,
         COHERE_MODEL_KEY: cohere_command,
         GROQ_LLAMA_3_MODEL_KEY: groq_llama3,
-        GPT_4O_MODEL_KEY: gpt_4o,
+        OPENAI_MODEL_KEY: gpt_4o_mini,
         CLAUDE_35_SONNET_MODEL_KEY: claude_35_sonnet,
     },
 ).with_fallbacks(
     [
+        gpt_4o,
         gpt_4o_mini,
         claude_3_haiku,
         fireworks_mixtral,
@@ -413,7 +414,7 @@ def synthesize_response_cohere(state: AgentState, config: RunnableConfig) -> Age
 def route_to_response_synthesizer(
     state: AgentState, config: RunnableConfig
 ) -> Literal["response_synthesizer", "response_synthesizer_cohere"]:
-    model_name = config.get("configurable", {}).get("model_name", OPENAI_MODEL_KEY)
+    model_name = config.get("configurable", {}).get("model_name", GPT_4O_MODEL_KEY)
     if model_name == COHERE_MODEL_KEY:
         return "response_synthesizer_cohere"
     else:
