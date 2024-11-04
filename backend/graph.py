@@ -455,7 +455,7 @@ def web_search_documents(state: AgentState) -> AgentState:
                     metadata={
                         "source": "web_search",
                         "title": result.get('title', ''),
-                        "url": result.get('url', '')
+                        "url": result.get('url', ''),
                         "answer": result.get('answer', '')
                     }
                 )
