@@ -45,7 +45,7 @@ import { PricingPlan } from "./PricingPlan";
 import { useTranslations, useLocale } from 'next-intl';
 
 
-const MODEL_TYPES = ["openai_gpt_4o_mini", "anthropic_claude_3_haiku"];
+const MODEL_TYPES = ["openai_gpt_4o_mini", "anthropic_claude_3_haiku","openai_gpt_4o"];
 
 const defaultLlmValue =
   MODEL_TYPES[Math.floor(Math.random() * MODEL_TYPES.length)];
@@ -234,7 +234,7 @@ export function ChatWindow() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [llm, setLlm] = useState(
-    searchParams.get("llm") ?? "openai_gpt_4o_mini",
+    searchParams.get("llm") ?? "openai_gpt_4o",
   );
   const [llmIsLoading, setLlmIsLoading] = useState(true);
   const [assistantId, setAssistantId] = useState<string>("");
