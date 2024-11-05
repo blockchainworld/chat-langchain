@@ -284,42 +284,42 @@ def retrieve_documents(
         if not relevant_documents:
             print("No relevant documents found in retriever, trying web search...")
                 # 创建 Tavily 搜索工具
-                tool = TavilySearchResults(
-                    max_results=5,
-                    search_depth="advanced",
-                    include_answer=True,
-                    include_raw_content=True,
-                    include_images=True,
-                )
+            tool = TavilySearchResults(
+                max_results=5,
+                search_depth="advanced",
+                include_answer=True,
+                include_raw_content=True,
+                include_images=True,
+            )
 
-                # 执行网络搜索
-                search_results = tool.invoke({"query": query})
+            # 执行网络搜索
+            search_results = tool.invoke({"query": query})
 
-                web_documents = []
-                for result in search_results:
-                    content = ""
-                    if result.get('content'):
-                        content += f"Content: {result['content']}\n"
-                    if result.get('url'):
-                        content += f"URL: {result['url']}\n"
-                    
-                    web_documents.append(
-                        Document(
-                            page_content=content,
-                            metadata={
-                                "source": "web_search",
-                                "title": result.get('title', ''),
-                                "url": result.get('url', ''),
-                            }
-                        )
-                    )
+            web_documents = []
+            for result in search_results:
+                content = ""
+                if result.get('content'):
+                    content += f"Content: {result['content']}\n"
+                if result.get('url'):
+                    content += f"URL: {result['url']}\n"
                 
-                if web_documents:
-                    print("Found results from web search")
-                    state["documents"] = web_documents
-                else:
-                    print("No results found from web search")
-                    state["documents"] = []
+                web_documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": "web_search",
+                            "title": result.get('title', ''),
+                            "url": result.get('url', ''),
+                        }
+                    )
+                )
+            
+            if web_documents:
+                print("Found results from web search")
+                state["documents"] = web_documents
+            else:
+                print("No results found from web search")
+                state["documents"] = []
                     
         else:
             print("Found relevant documents in local retriever")
@@ -376,48 +376,48 @@ def retrieve_documents_with_chat_history(
         # 如果本地检索没有找到文档，尝试web搜索
         if not relevant_documents:
             print("No relevant documents found in retriever with chat history, trying web search...")
-                # 创建 Tavily 搜索工具
-                tool = TavilySearchResults(
-                    max_results=5,
-                    search_depth="advanced",
-                    include_answer=True,
-                    include_raw_content=True,
-                    include_images=True,
-                )
+            # 创建 Tavily 搜索工具
+            tool = TavilySearchResults(
+                max_results=5,
+                search_depth="advanced",
+                include_answer=True,
+                include_raw_content=True,
+                include_images=True,
+            )
 
-                # 使用压缩后的独立问题进行网络搜索
-                standalone_question = condense_question_chain.invoke(
-                    {"question": query, "chat_history": get_chat_history(messages[:-1])}
-                )
+            # 使用压缩后的独立问题进行网络搜索
+            standalone_question = condense_question_chain.invoke(
+                {"question": query, "chat_history": get_chat_history(messages[:-1])}
+            )
+            
+            print(f"Searching web with standalone question: {standalone_question}")
+            search_results = tool.invoke({"query": standalone_question})
+
+            web_documents = []
+            for result in search_results:
+                content = ""
+                if result.get('content'):
+                    content += f"Content: {result['content']}\n"
+                if result.get('url'):
+                    content += f"URL: {result['url']}\n"
                 
-                print(f"Searching web with standalone question: {standalone_question}")
-                search_results = tool.invoke({"query": standalone_question})
-
-                web_documents = []
-                for result in search_results:
-                    content = ""
-                    if result.get('content'):
-                        content += f"Content: {result['content']}\n"
-                    if result.get('url'):
-                        content += f"URL: {result['url']}\n"
-                    
-                    web_documents.append(
-                        Document(
-                            page_content=content,
-                            metadata={
-                                "source": "web_search",
-                                "title": result.get('title', ''),
-                                "url": result.get('url', ''),
-                            }
-                        )
+                web_documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": "web_search",
+                            "title": result.get('title', ''),
+                            "url": result.get('url', ''),
+                        }
                     )
-                
-                if web_documents:
-                    print("Found results from web search")
-                    state["documents"] = web_documents
-                else:
-                    print("No results found from web search")
-                    state["documents"] = []
+                )
+            
+            if web_documents:
+                print("Found results from web search")
+                state["documents"] = web_documents
+            else:
+                print("No results found from web search")
+                state["documents"] = []
                     
         else:
             print("Found relevant documents in local retriever with chat history")
