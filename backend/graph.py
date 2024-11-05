@@ -323,8 +323,8 @@ def retrieve_documents(
             web_documents = []
             for result in search_results:
                 content = ""
-                if result.get('title'):
-                    content += f"Title: {result['title']}\n"
+                # if result.get('title'):
+                #     content += f"Title: {result['url']}\n"
                 if result.get('content'):
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
@@ -335,7 +335,7 @@ def retrieve_documents(
                         page_content=content,
                         metadata={
                             "source": result.get('url', ''),
-                            "title": result.get('title', ''),
+                            "title": result.get('url', ''),
                             "type": "web_search",
                             "url": result.get('url', ''),
                         }
@@ -446,8 +446,8 @@ def retrieve_documents_with_chat_history(
             web_documents = []
             for result in search_results:
                 content = ""
-                if result.get('title'):
-                    content += f"Title: {result['url']}\n"
+                # if result.get('title'):
+                #     content += f"Title: {result['url']}\n"
                 if result.get('content'):
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
