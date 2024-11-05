@@ -1,7 +1,5 @@
 import contextlib
 import os
-import uuid
-import json
 from collections import defaultdict
 from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict
 
@@ -318,18 +316,12 @@ def retrieve_documents(
                 include_raw_content=True,
                 include_images=True,
             )
-            # 完整的工具调用格式
-            tool_call = {
-                "args": {"query": query},
-                "id": str(uuid.uuid4()),  # 生成随机 ID
-                "name": "tavily_search",
-                "type": "tool_call"
-            }
-            tool_message = tool.invoke(tool_call)
-            search_results = json.loads(tool_message.content)
+
+            # 执行网络搜索
+            search_results = tool.invoke({"query": query})
 
             web_documents = []
-            for result in search_results['results']:
+            for result in search_results:
                 content = ""
                 if result.get('title'):
                     content += f"Title: {result['title']}\n"
@@ -447,21 +439,15 @@ def retrieve_documents_with_chat_history(
                 include_raw_content=True,
                 include_images=True,
             )
-            # 完整的工具调用格式
-            tool_call = {
-                "args": {"query": query},
-                "id": str(uuid.uuid4()),  # 生成随机 ID
-                "name": "tavily_search",
-                "type": "tool_call"
-            }
-            tool_message = tool.invoke(tool_call)
-            search_results = json.loads(tool_message.content)
+
+            # 执行网络搜索
+            search_results = tool.invoke({"query": query})
 
             web_documents = []
-            for result in search_results['results']:
+            for result in search_results:
                 content = ""
                 if result.get('title'):
-                    content += f"Title: {result['title']}\n"
+                    content += f"Title: {result['url']}\n"
                 if result.get('content'):
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
@@ -472,7 +458,7 @@ def retrieve_documents_with_chat_history(
                         page_content=content,
                         metadata={
                             "source": result.get('url', ''),
-                            "title": result.get('title', ''),
+                            "title": result.get('url', ''),
                             "type": "web_search",
                             "url": result.get('url', ''),
                         }
