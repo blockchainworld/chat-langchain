@@ -452,7 +452,7 @@ def retrieve_documents_with_chat_history(
                 include_images=True,
             )
 
-             tool_call = {
+            tool_call = {
                 "args": {"query": query},
                 "id": str(uuid.uuid4()),
                 "name": "tavily_search",
