@@ -401,9 +401,12 @@ def retrieve_documents_with_chat_history(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
     config = ensure_config(config)
-    condense_question_chain = create_condense_question_chain(
-        llm,
-        "Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question."
+    model = llm.with_config(tags=["nostream"])
+    CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(REPHRASE_TEMPLATE)
+    condense_question_chain = (
+        CONDENSE_QUESTION_PROMPT | model | StrOutputParser()
+    ).with_config(
+        run_name="CondenseQuestion",
     )
 
     messages = convert_to_messages(state["messages"])
