@@ -1,6 +1,7 @@
 import contextlib
 import os
 import uuid
+import json
 from collections import defaultdict
 from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict
 
@@ -324,7 +325,8 @@ def retrieve_documents(
                 "name": "tavily_search",
                 "type": "tool_call"
             }
-            search_results = tool.invoke(tool_call)
+            tool_message = tool.invoke(tool_call)
+            search_results = json.loads(tool_message.content)
 
             web_documents = []
             for result in search_results['results']:
@@ -452,7 +454,8 @@ def retrieve_documents_with_chat_history(
                 "name": "tavily_search",
                 "type": "tool_call"
             }
-            search_results = tool.invoke(tool_call)
+            tool_message = tool.invoke(tool_call)
+            search_results = json.loads(tool_message.content)
 
             web_documents = []
             for result in search_results['results']:
