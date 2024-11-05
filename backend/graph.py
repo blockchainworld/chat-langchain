@@ -614,7 +614,6 @@ def synthesize_response(
         - You MUST use ONLY the information from the provided context
         - Do NOT add the note about AI knowledge
         - Do NOT use your own knowledge
-        - Make sure to cite sources properly using [${number}] notation
         """
     
     prompt = ChatPromptTemplate.from_messages([
