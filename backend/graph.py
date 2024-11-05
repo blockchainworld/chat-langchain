@@ -246,27 +246,6 @@ def format_docs(docs: Sequence[Document]) -> str:
     return "\n".join(formatted_docs)
 
 
-# def retrieve_documents(
-#     state: AgentState, *, config: Optional[RunnableConfig] = None
-# ) -> AgentState:
-#     config = ensure_config(config)
-#     messages = convert_to_messages(state["messages"])
-#     query = messages[-1].content
-    
-#     # 首先设置查询到状态中
-#     state["query"] = query
-    
-#     with get_retriever(k=config["configurable"].get("k")) as retriever:
-#         relevant_documents = retriever.invoke(query)
-#         # 如果没有找到相关文档，设置为空列表
-#         if not relevant_documents:
-#             print("No relevant documents found in retriever")
-#             state["documents"] = []
-#         else:
-#             state["documents"] = relevant_documents
-    
-#     return state
-
 def retrieve_documents(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
@@ -373,30 +352,6 @@ def retrieve_documents(
     
     return state
 
-# def retrieve_documents_with_chat_history(
-#     state: AgentState, *, config: Optional[RunnableConfig] = None
-# ) -> AgentState:
-#     config = ensure_config(config)
-#     condense_question_chain = create_condense_question_chain(
-#         llm,
-#         "Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question."
-#     )
-
-#     messages = convert_to_messages(state["messages"])
-#     query = messages[-1].content
-    
-#     # 设置查询到状态中
-#     state["query"] = query
-    
-#     with get_retriever(k=config["configurable"].get("k")) as retriever:
-#         retriever_with_condensed_question = condense_question_chain | retriever
-#         relevant_documents = retriever_with_condensed_question.invoke(
-#             {"question": query, "chat_history": get_chat_history(messages[:-1])}
-#         )
-#         state["documents"] = relevant_documents if relevant_documents else []
-    
-#     return state
-
 def retrieve_documents_with_chat_history(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
@@ -423,10 +378,8 @@ def retrieve_documents_with_chat_history(
         )
         print(f"Standalone question: {standalone_question}")
         
-        retriever_with_condensed_question = condense_question_chain | retriever
-        relevant_documents = retriever_with_condensed_question.invoke(
-            {"question": query, "chat_history": get_chat_history(messages[:-1])}
-        )
+        # 直接使用独立问题进行检索
+        relevant_documents = retriever.invoke(standalone_question)
         
         # 检查文档相关性
         should_use_web_search = False
@@ -442,14 +395,14 @@ def retrieve_documents_with_chat_history(
             for doc in relevant_documents:
                 # 相关性评分检查
                 score = getattr(doc, 'score', None)
-                if score and score < 0.7:  # 提高相关性阈值
+                if score and score < 0.8:  # 提高相关性阈值
                     continue
                 
                 # 内容质量检查
                 content = doc.page_content.strip()
                 
                 # 检查文档内容长度
-                if len(content) < 100:
+                if len(content) < 150:
                     continue
                 
                 # 检查与独立问题的关键词匹配度
@@ -458,7 +411,7 @@ def retrieve_documents_with_chat_history(
                 word_overlap = len(query_words.intersection(content_words))
                 
                 # 要求至少有30%的查询关键词出现在文档中
-                if word_overlap / len(query_words) < 0.3:
+                if word_overlap / len(query_words) < 0.4:
                     continue
                 
                 # 通过所有检查的文档被认为是高质量的
@@ -494,10 +447,6 @@ def retrieve_documents_with_chat_history(
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
                     content += f"URL: {result['url']}\n"
-                
-                # 对web搜索结果进行质量检查
-                if len(content.strip()) < 100:  # 确保web结果也足够长
-                    continue
                     
                 # 检查与独立问题的相关性
                 content_words = set(content.lower().split())
