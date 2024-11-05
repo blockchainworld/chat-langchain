@@ -280,10 +280,56 @@ def retrieve_documents(
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
-        # 如果没有找到相关文档，尝试web搜索
+        
+        # 检查文档相关性
+        should_use_web_search = False
+        
+        # 如果完全没有文档
         if not relevant_documents:
-            print("No relevant documents found in retriever, trying web search...")
-                # 创建 Tavily 搜索工具
+            should_use_web_search = True
+            print("No documents found in local retriever")
+        else:
+            # 使用更严格的相关性检查
+            relevant_count = 0
+            high_quality_docs = []
+            
+            for doc in relevant_documents:
+                # 相关性评分检查（提高阈值到0.7）
+                score = getattr(doc, 'score', None)
+                if score and score < 0.7:  # 提高相关性阈值
+                    continue
+                
+                # 内容质量检查
+                content = doc.page_content.strip()
+                
+                # 检查文档内容长度（增加到100个字符）
+                if len(content) < 100:
+                    continue
+                
+                # 检查内容是否包含关键词（可以根据query提取关键词）
+                query_words = set(query.lower().split())
+                content_words = set(content.lower().split())
+                word_overlap = len(query_words.intersection(content_words))
+                
+                # 要求至少有30%的查询关键词出现在文档中
+                if word_overlap / len(query_words) < 0.3:
+                    continue
+                
+                # 通过所有检查的文档被认为是高质量的
+                high_quality_docs.append(doc)
+                relevant_count += 1
+            
+            # 提高所需的相关文档数量到2
+            if relevant_count < 2:
+                should_use_web_search = True
+                print(f"Only found {relevant_count} relevant documents, not enough. Trying web search...")
+            else:
+                # 只保留高质量文档
+                relevant_documents = high_quality_docs
+        
+        # 如果需要使用web搜索
+        if should_use_web_search:
+            print("Using web search for better results...")
             tool = TavilySearchResults(
                 max_results=5,
                 search_depth="advanced",
@@ -302,7 +348,7 @@ def retrieve_documents(
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
                     content += f"URL: {result['url']}\n"
-                
+                    
                 web_documents.append(
                     Document(
                         page_content=content,
@@ -322,7 +368,7 @@ def retrieve_documents(
                 state["documents"] = []
                     
         else:
-            print("Found relevant documents in local retriever")
+            print(f"Found {len(relevant_documents)} high-quality relevant documents in local retriever")
             state["documents"] = relevant_documents
     
     return state
@@ -368,15 +414,65 @@ def retrieve_documents_with_chat_history(
     
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
+        # 获取独立问题
+        standalone_question = condense_question_chain.invoke(
+            {"question": query, "chat_history": get_chat_history(messages[:-1])}
+        )
+        print(f"Standalone question: {standalone_question}")
+        
         retriever_with_condensed_question = condense_question_chain | retriever
         relevant_documents = retriever_with_condensed_question.invoke(
             {"question": query, "chat_history": get_chat_history(messages[:-1])}
         )
         
-        # 如果本地检索没有找到文档，尝试web搜索
+        # 检查文档相关性
+        should_use_web_search = False
+        
         if not relevant_documents:
-            print("No relevant documents found in retriever with chat history, trying web search...")
-            # 创建 Tavily 搜索工具
+            should_use_web_search = True
+            print("No documents found in local retriever")
+        else:
+            # 使用更严格的相关性检查
+            relevant_count = 0
+            high_quality_docs = []
+            
+            for doc in relevant_documents:
+                # 相关性评分检查
+                score = getattr(doc, 'score', None)
+                if score and score < 0.7:  # 提高相关性阈值
+                    continue
+                
+                # 内容质量检查
+                content = doc.page_content.strip()
+                
+                # 检查文档内容长度
+                if len(content) < 100:
+                    continue
+                
+                # 检查与独立问题的关键词匹配度
+                query_words = set(standalone_question.lower().split())
+                content_words = set(content.lower().split())
+                word_overlap = len(query_words.intersection(content_words))
+                
+                # 要求至少有30%的查询关键词出现在文档中
+                if word_overlap / len(query_words) < 0.3:
+                    continue
+                
+                # 通过所有检查的文档被认为是高质量的
+                high_quality_docs.append(doc)
+                relevant_count += 1
+            
+            # 提高所需的相关文档数量到2
+            if relevant_count < 2:
+                should_use_web_search = True
+                print(f"Only found {relevant_count} relevant documents, not enough. Trying web search...")
+            else:
+                # 只保留高质量文档
+                relevant_documents = high_quality_docs
+        
+        # 如果需要使用web搜索
+        if should_use_web_search:
+            print(f"Using web search with standalone question: {standalone_question}")
             tool = TavilySearchResults(
                 max_results=5,
                 search_depth="advanced",
@@ -385,12 +481,7 @@ def retrieve_documents_with_chat_history(
                 include_images=True,
             )
 
-            # 使用压缩后的独立问题进行网络搜索
-            standalone_question = condense_question_chain.invoke(
-                {"question": query, "chat_history": get_chat_history(messages[:-1])}
-            )
-            
-            print(f"Searching web with standalone question: {standalone_question}")
+            # 使用独立问题进行网络搜索
             search_results = tool.invoke({"query": standalone_question})
 
             web_documents = []
@@ -400,6 +491,16 @@ def retrieve_documents_with_chat_history(
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
                     content += f"URL: {result['url']}\n"
+                
+                # 对web搜索结果进行质量检查
+                if len(content.strip()) < 100:  # 确保web结果也足够长
+                    continue
+                    
+                # 检查与独立问题的相关性
+                content_words = set(content.lower().split())
+                word_overlap = len(query_words.intersection(content_words))
+                if word_overlap / len(query_words) < 0.3:
+                    continue
                 
                 web_documents.append(
                     Document(
@@ -413,14 +514,14 @@ def retrieve_documents_with_chat_history(
                 )
             
             if web_documents:
-                print("Found results from web search")
+                print(f"Found {len(web_documents)} quality results from web search")
                 state["documents"] = web_documents
             else:
-                print("No results found from web search")
+                print("No quality results found from web search")
                 state["documents"] = []
                     
         else:
-            print("Found relevant documents in local retriever with chat history")
+            print(f"Found {len(relevant_documents)} high-quality relevant documents in local retriever")
             state["documents"] = relevant_documents
     
     return state
