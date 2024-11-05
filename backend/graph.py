@@ -324,7 +324,7 @@ def retrieve_documents(
             for result in search_results:
                 content = ""
                 if result.get('title'):
-                content += f"Title: {result['title']}\n"
+                    content += f"Title: {result['title']}\n"
                 if result.get('content'):
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
@@ -447,7 +447,7 @@ def retrieve_documents_with_chat_history(
             for result in search_results:
                 content = ""
                 if result.get('title'):
-                content += f"Title: {result['title']}\n"
+                    content += f"Title: {result['title']}\n"
                 if result.get('content'):
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
