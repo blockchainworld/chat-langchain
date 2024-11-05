@@ -1,5 +1,8 @@
 import contextlib
 import os
+import uuid
+import json
+import ast
 from collections import defaultdict
 from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict
 
@@ -317,14 +320,23 @@ def retrieve_documents(
                 include_images=True,
             )
 
-            # 执行网络搜索
-            search_results = tool.invoke({"query": query})
+            tool_call = {
+                "args": {"query": query},
+                "id": str(uuid.uuid4()),
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            
+            # 获取 ToolMessage 对象并解析内容
+            tool_message = tool.invoke(tool_call)
+            search_response = json.loads(tool_message.content)
 
             web_documents = []
-            for result in search_results:
+            results = ast.literal_eval(search_response['results'])
+            for result in results:
                 content = ""
-                # if result.get('title'):
-                #     content += f"Title: {result['url']}\n"
+                if result.get('title'):
+                    content += f"Title: {result['title']}\n"
                 if result.get('content'):
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
@@ -335,7 +347,7 @@ def retrieve_documents(
                         page_content=content,
                         metadata={
                             "source": result.get('url', ''),
-                            "title": result.get('url', ''),
+                            "title": result.get('title', ''),
                             "type": "web_search",
                             "url": result.get('url', ''),
                         }
@@ -440,14 +452,23 @@ def retrieve_documents_with_chat_history(
                 include_images=True,
             )
 
-            # 执行网络搜索
-            search_results = tool.invoke({"query": query})
+             tool_call = {
+                "args": {"query": query},
+                "id": str(uuid.uuid4()),
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            
+            # 获取 ToolMessage 对象并解析内容
+            tool_message = tool.invoke(tool_call)
+            search_response = json.loads(tool_message.content)
 
             web_documents = []
-            for result in search_results:
+            results = ast.literal_eval(search_response['results'])
+            for result in results:
                 content = ""
-                # if result.get('title'):
-                #     content += f"Title: {result['url']}\n"
+                if result.get('title'):
+                    content += f"Title: {result['title']}\n"
                 if result.get('content'):
                     content += f"Content: {result['content']}\n"
                 if result.get('url'):
@@ -458,7 +479,7 @@ def retrieve_documents_with_chat_history(
                         page_content=content,
                         metadata={
                             "source": result.get('url', ''),
-                            "title": result.get('url', ''),
+                            "title": result.get('title', ''),
                             "type": "web_search",
                             "url": result.get('url', ''),
                         }
