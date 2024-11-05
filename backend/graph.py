@@ -246,6 +246,27 @@ def format_docs(docs: Sequence[Document]) -> str:
     return "\n".join(formatted_docs)
 
 
+# def retrieve_documents(
+#     state: AgentState, *, config: Optional[RunnableConfig] = None
+# ) -> AgentState:
+#     config = ensure_config(config)
+#     messages = convert_to_messages(state["messages"])
+#     query = messages[-1].content
+    
+#     # 首先设置查询到状态中
+#     state["query"] = query
+    
+#     with get_retriever(k=config["configurable"].get("k")) as retriever:
+#         relevant_documents = retriever.invoke(query)
+#         # 如果没有找到相关文档，设置为空列表
+#         if not relevant_documents:
+#             print("No relevant documents found in retriever")
+#             state["documents"] = []
+#         else:
+#             state["documents"] = relevant_documents
+    
+#     return state
+
 def retrieve_documents(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
@@ -256,16 +277,79 @@ def retrieve_documents(
     # 首先设置查询到状态中
     state["query"] = query
     
+    # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
-        # 如果没有找到相关文档，设置为空列表
+        # 如果没有找到相关文档，尝试web搜索
         if not relevant_documents:
-            print("No relevant documents found in retriever")
-            state["documents"] = []
+            print("No relevant documents found in retriever, trying web search...")
+                # 创建 Tavily 搜索工具
+                tool = TavilySearchResults(
+                    max_results=5,
+                    search_depth="advanced",
+                    include_answer=True,
+                    include_raw_content=True,
+                    include_images=True,
+                )
+
+                # 执行网络搜索
+                search_results = tool.invoke({"query": query})
+
+                web_documents = []
+                for result in search_results:
+                    content = ""
+                    if result.get('content'):
+                        content += f"Content: {result['content']}\n"
+                    if result.get('url'):
+                        content += f"URL: {result['url']}\n"
+                    
+                    web_documents.append(
+                        Document(
+                            page_content=content,
+                            metadata={
+                                "source": "web_search",
+                                "title": result.get('title', ''),
+                                "url": result.get('url', ''),
+                            }
+                        )
+                    )
+                
+                if web_documents:
+                    print("Found results from web search")
+                    state["documents"] = web_documents
+                else:
+                    print("No results found from web search")
+                    state["documents"] = []
+                    
         else:
+            print("Found relevant documents in local retriever")
             state["documents"] = relevant_documents
     
     return state
+
+# def retrieve_documents_with_chat_history(
+#     state: AgentState, *, config: Optional[RunnableConfig] = None
+# ) -> AgentState:
+#     config = ensure_config(config)
+#     condense_question_chain = create_condense_question_chain(
+#         llm,
+#         "Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question."
+#     )
+
+#     messages = convert_to_messages(state["messages"])
+#     query = messages[-1].content
+    
+#     # 设置查询到状态中
+#     state["query"] = query
+    
+#     with get_retriever(k=config["configurable"].get("k")) as retriever:
+#         retriever_with_condensed_question = condense_question_chain | retriever
+#         relevant_documents = retriever_with_condensed_question.invoke(
+#             {"question": query, "chat_history": get_chat_history(messages[:-1])}
+#         )
+#         state["documents"] = relevant_documents if relevant_documents else []
+    
+#     return state
 
 def retrieve_documents_with_chat_history(
     state: AgentState, *, config: Optional[RunnableConfig] = None
@@ -282,25 +366,74 @@ def retrieve_documents_with_chat_history(
     # 设置查询到状态中
     state["query"] = query
     
+    # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         retriever_with_condensed_question = condense_question_chain | retriever
         relevant_documents = retriever_with_condensed_question.invoke(
             {"question": query, "chat_history": get_chat_history(messages[:-1])}
         )
-        state["documents"] = relevant_documents if relevant_documents else []
+        
+        # 如果本地检索没有找到文档，尝试web搜索
+        if not relevant_documents:
+            print("No relevant documents found in retriever with chat history, trying web search...")
+                # 创建 Tavily 搜索工具
+                tool = TavilySearchResults(
+                    max_results=5,
+                    search_depth="advanced",
+                    include_answer=True,
+                    include_raw_content=True,
+                    include_images=True,
+                )
+
+                # 使用压缩后的独立问题进行网络搜索
+                standalone_question = condense_question_chain.invoke(
+                    {"question": query, "chat_history": get_chat_history(messages[:-1])}
+                )
+                
+                print(f"Searching web with standalone question: {standalone_question}")
+                search_results = tool.invoke({"query": standalone_question})
+
+                web_documents = []
+                for result in search_results:
+                    content = ""
+                    if result.get('content'):
+                        content += f"Content: {result['content']}\n"
+                    if result.get('url'):
+                        content += f"URL: {result['url']}\n"
+                    
+                    web_documents.append(
+                        Document(
+                            page_content=content,
+                            metadata={
+                                "source": "web_search",
+                                "title": result.get('title', ''),
+                                "url": result.get('url', ''),
+                            }
+                        )
+                    )
+                
+                if web_documents:
+                    print("Found results from web search")
+                    state["documents"] = web_documents
+                else:
+                    print("No results found from web search")
+                    state["documents"] = []
+                    
+        else:
+            print("Found relevant documents in local retriever with chat history")
+            state["documents"] = relevant_documents
     
     return state
 
-
 def route_to_retriever(
     state: AgentState,
-) -> Literal["web_search", "retriever", "retriever_with_chat_history"]:
+) -> Literal["retriever", "retriever_with_chat_history"]:
     messages = convert_to_messages(state["messages"])
     
     # 如果已经有文档且为空，说明本地检索失败，使用 web_search
-    if "documents" in state and (not state["documents"] or len(state["documents"]) == 0):
-        print("No local documents found, routing to web_search")
-        return "web_search"
+    # if "documents" in state and (not state["documents"] or len(state["documents"]) == 0):
+    #     print("No local documents found, routing to web_search")
+    #     return "web_search"
     
     # 根据消息长度决定检索方式
     if len(messages) == 1:
@@ -435,49 +568,49 @@ def route_to_response_synthesizer(
         return "response_synthesizer"
 
 # 添加新的搜索引擎节点函数
-def web_search_documents(state: AgentState) -> AgentState:
+# def web_search_documents(state: AgentState) -> AgentState:
 
-    messages = convert_to_messages(state["messages"])
-    query = messages[-1].content
-    state["query"] = query
+#     messages = convert_to_messages(state["messages"])
+#     query = messages[-1].content
+#     state["query"] = query
 
     
-    tool = TavilySearchResults(
-        max_results=5,
-        search_depth="advanced",
-        include_answer=True,
-        include_raw_content=True,
-        include_images=True,
-        # include_domains=[...],
-        # exclude_domains=[...],
-        # name="...",            # overwrite default tool name
-        # description="...",     # overwrite default tool description
-        # args_schema=...,       # overwrite default args_schema: BaseModel
-    )
+#     tool = TavilySearchResults(
+#         max_results=5,
+#         search_depth="advanced",
+#         include_answer=True,
+#         include_raw_content=True,
+#         include_images=True,
+#         # include_domains=[...],
+#         # exclude_domains=[...],
+#         # name="...",            # overwrite default tool name
+#         # description="...",     # overwrite default tool description
+#         # args_schema=...,       # overwrite default args_schema: BaseModel
+#     )
 
-    search_results = tool.invoke({"query": query})
+#     search_results = tool.invoke({"query": query})
 
-    web_documents = []
-    for result in search_results:
-        content = ""
-        if result.get('content'):
-            content += f"Content: {result['content']}\n"
-        if result.get('url'):
-            content += f"URL: {result['url']}\n"
+#     web_documents = []
+#     for result in search_results:
+#         content = ""
+#         if result.get('content'):
+#             content += f"Content: {result['content']}\n"
+#         if result.get('url'):
+#             content += f"URL: {result['url']}\n"
         
-        web_documents.append(
-            Document(
-                page_content=content,
-                metadata={
-                    "source": "web_search",
-                    "title": result.get('title', ''),
-                    "url": result.get('url', ''),
-                }
-            )
-        )
+#         web_documents.append(
+#             Document(
+#                 page_content=content,
+#                 metadata={
+#                     "source": "web_search",
+#                     "title": result.get('title', ''),
+#                     "url": result.get('url', ''),
+#                 }
+#             )
+#         )
     
-    state["documents"] = web_documents
-    return state
+#     state["documents"] = web_documents
+#     return state
     
 
 
@@ -494,7 +627,7 @@ workflow = StateGraph(AgentState, Configuration, input=InputSchema)
 
 # define nodes
 workflow.add_node("stock_symbol_check", check_stock_symbols)
-workflow.add_node("web_search", web_search_documents)
+# workflow.add_node("web_search", web_search_documents)
 workflow.add_node("retriever", retrieve_documents)
 workflow.add_node("retriever_with_chat_history", retrieve_documents_with_chat_history)
 workflow.add_node("response_synthesizer", synthesize_response_default)
@@ -509,8 +642,7 @@ workflow.add_conditional_edges(
     route_to_retriever,
     {
         "retriever": "retriever",
-        "retriever_with_chat_history": "retriever_with_chat_history",
-        "web_search": "web_search"
+        "retriever_with_chat_history": "retriever_with_chat_history"
     }
 )
 
@@ -531,14 +663,14 @@ workflow.add_conditional_edges(
         "response_synthesizer_cohere": "response_synthesizer_cohere"
     }
 )
-workflow.add_conditional_edges(
-    "web_search",
-    route_to_response_synthesizer,
-    {
-        "response_synthesizer": "response_synthesizer",
-        "response_synthesizer_cohere": "response_synthesizer_cohere"
-    }
-)
+# workflow.add_conditional_edges(
+#     "web_search",
+#     route_to_response_synthesizer,
+#     {
+#         "response_synthesizer": "response_synthesizer",
+#         "response_synthesizer_cohere": "response_synthesizer_cohere"
+#     }
+# )
 
 # connect synthesizers to terminal node
 workflow.add_edge("response_synthesizer", END)
