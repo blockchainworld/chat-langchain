@@ -426,9 +426,9 @@ def retrieve_documents_with_chat_history(
                 # 只保留高质量文档
                 relevant_documents = high_quality_docs
         
-        # 如果需要使用web搜索
+         # 如果需要使用web搜索
         if should_use_web_search:
-            print(f"Using web search with standalone question: {standalone_question}")
+            print("Using web search for better results...")
             tool = TavilySearchResults(
                 max_results=5,
                 search_depth="advanced",
@@ -437,8 +437,8 @@ def retrieve_documents_with_chat_history(
                 include_images=True,
             )
 
-            # 使用独立问题进行网络搜索
-            search_results = tool.invoke({"query": standalone_question})
+            # 执行网络搜索
+            search_results = tool.invoke({"query": query})
 
             web_documents = []
             for result in search_results:
@@ -448,12 +448,6 @@ def retrieve_documents_with_chat_history(
                 if result.get('url'):
                     content += f"URL: {result['url']}\n"
                     
-                # 检查与独立问题的相关性
-                content_words = set(content.lower().split())
-                word_overlap = len(query_words.intersection(content_words))
-                if word_overlap / len(query_words) < 0.3:
-                    continue
-                
                 web_documents.append(
                     Document(
                         page_content=content,
@@ -466,10 +460,10 @@ def retrieve_documents_with_chat_history(
                 )
             
             if web_documents:
-                print(f"Found {len(web_documents)} quality results from web search")
+                print("Found results from web search")
                 state["documents"] = web_documents
             else:
-                print("No quality results found from web search")
+                print("No results found from web search")
                 state["documents"] = []
                     
         else:
