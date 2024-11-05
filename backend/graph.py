@@ -329,7 +329,7 @@ def retrieve_documents(
             
             # 获取 ToolMessage 对象并解析内容
             tool_message = tool.invoke(tool_call)
-            search_response = json.loads(tool_message.content)
+            search_response = tool_message.artifact
 
             web_documents = []
             results = ast.literal_eval(search_response['results'])
@@ -461,7 +461,7 @@ def retrieve_documents_with_chat_history(
             
             # 获取 ToolMessage 对象并解析内容
             tool_message = tool.invoke(tool_call)
-            search_response = json.loads(tool_message.content)
+            search_response = tool_message.artifact
 
             web_documents = []
             results = ast.literal_eval(search_response['results'])
