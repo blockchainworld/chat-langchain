@@ -316,12 +316,17 @@ def retrieve_documents(
                 include_raw_content=True,
                 include_images=True,
             )
-
-            # 执行网络搜索
-            search_results = tool.invoke({"query": query})
+            # 完整的工具调用格式
+            tool_call = {
+                "args": {"query": query},
+                "id": str(uuid.uuid4()),  # 生成随机 ID
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            search_results = tool.invoke(tool_call)
 
             web_documents = []
-            for result in search_results:
+            for result in search_results['results']:
                 content = ""
                 if result.get('title'):
                     content += f"Title: {result['title']}\n"
@@ -439,12 +444,17 @@ def retrieve_documents_with_chat_history(
                 include_raw_content=True,
                 include_images=True,
             )
-
-            # 执行网络搜索
-            search_results = tool.invoke({"query": query})
+            # 完整的工具调用格式
+            tool_call = {
+                "args": {"query": query},
+                "id": str(uuid.uuid4()),  # 生成随机 ID
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            search_results = tool.invoke(tool_call)
 
             web_documents = []
-            for result in search_results:
+            for result in search_results['results']:
                 content = ""
                 if result.get('title'):
                     content += f"Title: {result['title']}\n"
