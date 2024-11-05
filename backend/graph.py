@@ -329,7 +329,7 @@ def retrieve_documents(
             
             # 获取 ToolMessage 对象并解析内容
             tool_message = tool.invoke(tool_call)
-            search_response = json.dumps({k: str(v) for k, v in tool_message.artifact.items()})
+            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
             results= eval(search_response['results'])
 
             web_documents = []
@@ -461,7 +461,7 @@ def retrieve_documents_with_chat_history(
             
             # 获取 ToolMessage 对象并解析内容
             tool_message = tool.invoke(tool_call)
-            search_response = json.dumps({k: str(v) for k, v in tool_message.artifact.items()})
+            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
             results= eval(search_response['results'])
 
             web_documents = []
