@@ -332,8 +332,9 @@ def retrieve_documents(
                     Document(
                         page_content=content,
                         metadata={
-                            "source": "web_search",
+                            "source": result.get('url', ''),
                             "title": result.get('title', ''),
+                            "type": "web_search",
                             "url": result.get('url', ''),
                         }
                     )
@@ -452,8 +453,9 @@ def retrieve_documents_with_chat_history(
                     Document(
                         page_content=content,
                         metadata={
-                            "source": "web_search",
+                            "source": result.get('url', ''),
                             "title": result.get('title', ''),
+                            "type": "web_search",
                             "url": result.get('url', ''),
                         }
                     )
@@ -549,25 +551,90 @@ def synthesize_response_old(
         "feedback_urls": feedback_urls,
     }
 
+# def synthesize_response(
+#     state: AgentState,
+#     config: RunnableConfig,
+#     model: LanguageModelLike,
+#     prompt_template: str,
+# ) -> AgentState:
+#     prompt = ChatPromptTemplate.from_messages([
+#         ("system", prompt_template),
+#         ("placeholder", "{chat_history}"),
+#         ("human", "{question}"),
+#     ])
+#     response_synthesizer = prompt | model
+
+#     # 先创建基础 context
+#     context = format_docs(state["documents"])
+    
+#     # 检查是否是 web search 结果
+#     if state.get("documents") and state["documents"][0].metadata.get("source") == "web_search":
+#        context = "Information from web search:\n" + context
+    
+#     # 添加股票数据
+#     if "stock_data" in state and state["stock_data"]:
+#         stock_info = format_stock_info(state["stock_data"])
+#         context = stock_info + "\n" + context
+
+#     synthesized_response = response_synthesizer.invoke(
+#         {
+#             "question": state["query"],
+#             "context": context,
+#             "chat_history": get_chat_history(
+#                 convert_to_messages(state["messages"][:-1])
+#             ),
+#         }
+#     )
+#     feedback_urls = get_feedback_urls(config)
+#     return {
+#         "messages": [synthesized_response],
+#         "answer": synthesized_response.content,
+#         "feedback_urls": feedback_urls,
+#         "query": state["query"],               # 保持状态
+#         "documents": state["documents"],       # 保持状态
+#         "stock_data": state.get("stock_data")  # 保持状态
+#     }
+
 def synthesize_response(
     state: AgentState,
     config: RunnableConfig,
     model: LanguageModelLike,
     prompt_template: str,
 ) -> AgentState:
+    # 检查是否有文档
+    has_documents = bool(state.get("documents"))
+    
+    # 修改 prompt 来处理不同情况
+    modified_prompt = prompt_template
+    if has_documents:
+        # 如果有文档，添加覆盖指令
+        modified_prompt += """
+        IMPORTANT OVERRIDE: 
+        - Relevant information has been found and provided in the context above
+        - You MUST use ONLY the information from the provided context
+        - Do NOT add the note about AI knowledge
+        - Do NOT use your own knowledge
+        - Make sure to cite sources properly using [${number}] notation
+        """
+    
     prompt = ChatPromptTemplate.from_messages([
-        ("system", prompt_template),
+        ("system", modified_prompt),
         ("placeholder", "{chat_history}"),
         ("human", "{question}"),
     ])
     response_synthesizer = prompt | model
 
-    # 先创建基础 context
+    # 创建基础 context
     context = format_docs(state["documents"])
     
     # 检查是否是 web search 结果
-    if state.get("documents") and state["documents"][0].metadata.get("source") == "web_search":
-       context = "Information from web search:\n" + context
+    if state.get("documents"):
+        is_web_search = any(
+            doc.metadata.get("type") == "web_search" 
+            for doc in state["documents"]
+        )
+        if is_web_search:
+            context = "Information from web search:\n" + context
     
     # 添加股票数据
     if "stock_data" in state and state["stock_data"]:
@@ -583,6 +650,7 @@ def synthesize_response(
             ),
         }
     )
+    
     feedback_urls = get_feedback_urls(config)
     return {
         "messages": [synthesized_response],
@@ -592,7 +660,6 @@ def synthesize_response(
         "documents": state["documents"],       # 保持状态
         "stock_data": state.get("stock_data")  # 保持状态
     }
-
 
 def synthesize_response_default(
     state: AgentState, config: RunnableConfig
