@@ -1,5 +1,6 @@
 import contextlib
 import os
+import uuid
 from collections import defaultdict
 from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict
 
