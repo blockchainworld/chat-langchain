@@ -1,5 +1,8 @@
 import contextlib
 import os
+import uuid
+import json
+import ast
 from collections import defaultdict
 from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict
 
@@ -29,6 +32,8 @@ from langchain_openai import ChatOpenAI
 from langchain_weaviate import WeaviateVectorStore
 from langgraph.graph import END, StateGraph, add_messages
 from langsmith import Client as LangsmithClient
+from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
+from langchain_community.tools import TavilySearchResults
 
 from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
@@ -38,12 +43,12 @@ from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
 RESPONSE_TEMPLATE = """
 You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
 
-Generate a comprehensive and informative answer of 260 words or less for the given question based solely on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
+Generate a comprehensive and informative answer of 500 words or less for the given question based solely on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
 
-Strictly maintain the length limit of 260 words/characters.
+Strictly maintain the length limit of 500 words/characters.
 
 IMPORTANT: 
-- For Chinese responses: Your answer MUST NOT exceed 320 characters. Keep responses focused and informative.
+- For Chinese responses: Your answer MUST NOT exceed 500 characters. Keep responses focused and informative.
 
 You should use bullet points in your answer for readability. Put citations where they apply rather than putting them all at the end.
 
@@ -112,6 +117,7 @@ CLAUDE_35_SONNET_MODEL_KEY = "anthropic_claude_3_5_sonnet"
 
 FEEDBACK_KEYS = ["user_score", "user_click"]
 
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "not_provided")
 
 def update_documents(
     _: list[Document], right: list[Document] | list[dict]
@@ -249,17 +255,123 @@ def retrieve_documents(
     config = ensure_config(config)
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
+    
+    # 首先设置查询到状态中
+    state["query"] = query
+    
+    # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
-    return {"query": query, "documents": relevant_documents}
+        
+        # 检查文档相关性
+        should_use_web_search = False
+        
+        # 如果完全没有文档
+        if not relevant_documents:
+            should_use_web_search = True
+            print("No documents found in local retriever")
+        else:
+            # 使用更严格的相关性检查
+            relevant_count = 0
+            high_quality_docs = []
+            
+            for doc in relevant_documents:
+                # 相关性评分检查（提高阈值到0.7）
+                score = getattr(doc, 'score', None)
+                if score and score < 0.7:  # 提高相关性阈值
+                    continue
+                
+                # 内容质量检查
+                content = doc.page_content.strip()
+                
+                # 检查文档内容长度（增加到100个字符）
+                if len(content) < 100:
+                    continue
+                
+                # 检查内容是否包含关键词（可以根据query提取关键词）
+                query_words = set(query.lower().split())
+                content_words = set(content.lower().split())
+                word_overlap = len(query_words.intersection(content_words))
+                
+                # 要求至少有30%的查询关键词出现在文档中
+                if word_overlap / len(query_words) < 0.3:
+                    continue
+                
+                # 通过所有检查的文档被认为是高质量的
+                high_quality_docs.append(doc)
+                relevant_count += 1
+            
+            # 提高所需的相关文档数量到2
+            if relevant_count < 2:
+                should_use_web_search = True
+                print(f"Only found {relevant_count} relevant documents, not enough. Trying web search...")
+            else:
+                # 只保留高质量文档
+                relevant_documents = high_quality_docs
+        
+        # 如果需要使用web搜索
+        if should_use_web_search:
+            print("Using web search for better results...")
+            tool = TavilySearchResults(
+                max_results=5,
+                search_depth="advanced",
+                include_answer=True,
+                include_raw_content=True,
+                include_images=True,
+            )
 
+            tool_call = {
+                "args": {"query": query},
+                "id": str(uuid.uuid4()),
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            
+            # 获取 ToolMessage 对象并解析内容
+            tool_message = tool.invoke(tool_call)
+            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+            results= eval(search_response['results'])
+
+            web_documents = []
+            for result in results:
+                content = ""
+                if result.get('title'):
+                    content += f"Title: {result['title']}\n"
+                if result.get('content'):
+                    content += f"Content: {result['content']}\n"
+                if result.get('url'):
+                    content += f"URL: {result['url']}\n"
+                    
+                web_documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": result.get('url', ''),
+                            "title": result.get('title', ''),
+                            "type": "web_search",
+                            "url": result.get('url', ''),
+                        }
+                    )
+                )
+            
+            if web_documents:
+                print("Found results from web search")
+                state["documents"] = web_documents
+            else:
+                print("No results found from web search")
+                state["documents"] = []
+                    
+        else:
+            print(f"Found {len(relevant_documents)} high-quality relevant documents in local retriever")
+            state["documents"] = relevant_documents
+    
+    return state
 
 def retrieve_documents_with_chat_history(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
     config = ensure_config(config)
     model = llm.with_config(tags=["nostream"])
-
     CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(REPHRASE_TEMPLATE)
     condense_question_chain = (
         CONDENSE_QUESTION_PROMPT | model | StrOutputParser()
@@ -269,22 +381,136 @@ def retrieve_documents_with_chat_history(
 
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
+    
+    # 设置查询到状态中
+    state["query"] = query
+    
+    # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
-        retriever_with_condensed_question = condense_question_chain | retriever
-        # NOTE: we're ignoring the last message here, as it's going to contain the most recent
-        # query and we don't want that to be included in the chat history
-        relevant_documents = retriever_with_condensed_question.invoke(
+        # 获取独立问题
+        standalone_question = condense_question_chain.invoke(
             {"question": query, "chat_history": get_chat_history(messages[:-1])}
         )
-    return {"query": query, "documents": relevant_documents}
+        print(f"Standalone question: {standalone_question}")
+        
+        # 直接使用独立问题进行检索
+        relevant_documents = retriever.invoke(standalone_question)
+        
+        # 检查文档相关性
+        should_use_web_search = False
+        
+        if not relevant_documents:
+            should_use_web_search = True
+            print("No documents found in local retriever")
+        else:
+            # 使用更严格的相关性检查
+            relevant_count = 0
+            high_quality_docs = []
+            
+            for doc in relevant_documents:
+                # 相关性评分检查
+                score = getattr(doc, 'score', None)
+                if score and score < 0.8:  # 提高相关性阈值
+                    continue
+                
+                # 内容质量检查
+                content = doc.page_content.strip()
+                
+                # 检查文档内容长度
+                if len(content) < 150:
+                    continue
+                
+                # 检查与独立问题的关键词匹配度
+                query_words = set(standalone_question.lower().split())
+                content_words = set(content.lower().split())
+                word_overlap = len(query_words.intersection(content_words))
+                
+                # 要求至少有30%的查询关键词出现在文档中
+                if word_overlap / len(query_words) < 0.4:
+                    continue
+                
+                # 通过所有检查的文档被认为是高质量的
+                high_quality_docs.append(doc)
+                relevant_count += 1
+            
+            # 提高所需的相关文档数量到2
+            if relevant_count < 2:
+                should_use_web_search = True
+                print(f"Only found {relevant_count} relevant documents, not enough. Trying web search...")
+            else:
+                # 只保留高质量文档
+                relevant_documents = high_quality_docs
+        
+         # 如果需要使用web搜索
+        if should_use_web_search:
+            print("Using web search for better results...")
+            tool = TavilySearchResults(
+                max_results=5,
+                search_depth="advanced",
+                include_answer=True,
+                include_raw_content=True,
+                include_images=True,
+            )
 
+            tool_call = {
+                "args": {"query": query},
+                "id": str(uuid.uuid4()),
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            
+            # 获取 ToolMessage 对象并解析内容
+            tool_message = tool.invoke(tool_call)
+            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+            results= eval(search_response['results'])
+
+            web_documents = []
+            for result in results:
+                content = ""
+                if result.get('title'):
+                    content += f"Title: {result['title']}\n"
+                if result.get('content'):
+                    content += f"Content: {result['content']}\n"
+                if result.get('url'):
+                    content += f"URL: {result['url']}\n"
+                    
+                web_documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": result.get('url', ''),
+                            "title": result.get('title', ''),
+                            "type": "web_search",
+                            "url": result.get('url', ''),
+                        }
+                    )
+                )
+            
+            if web_documents:
+                print("Found results from web search")
+                state["documents"] = web_documents
+            else:
+                print("No results found from web search")
+                state["documents"] = []
+                    
+        else:
+            print(f"Found {len(relevant_documents)} high-quality relevant documents in local retriever")
+            state["documents"] = relevant_documents
+    
+    return state
 
 def route_to_retriever(
     state: AgentState,
 ) -> Literal["retriever", "retriever_with_chat_history"]:
-    # at this point in the graph execution there is exactly one (i.e. first) message from the user,
-    # so use basic retriever without chat history
-    if len(state["messages"]) == 1:
+    messages = convert_to_messages(state["messages"])
+    
+    # 如果已经有文档且为空，说明本地检索失败，使用 web_search
+    # if "documents" in state and (not state["documents"] or len(state["documents"]) == 0):
+    #     print("No local documents found, routing to web_search")
+    #     return "web_search"
+    
+    # 根据消息长度决定检索方式
+    if len(messages) == 1:
         return "retriever"
     else:
         return "retriever_with_chat_history"
@@ -350,23 +576,91 @@ def synthesize_response_old(
         "feedback_urls": feedback_urls,
     }
 
+# def synthesize_response(
+#     state: AgentState,
+#     config: RunnableConfig,
+#     model: LanguageModelLike,
+#     prompt_template: str,
+# ) -> AgentState:
+#     prompt = ChatPromptTemplate.from_messages([
+#         ("system", prompt_template),
+#         ("placeholder", "{chat_history}"),
+#         ("human", "{question}"),
+#     ])
+#     response_synthesizer = prompt | model
+
+#     # 先创建基础 context
+#     context = format_docs(state["documents"])
+    
+#     # 检查是否是 web search 结果
+#     if state.get("documents") and state["documents"][0].metadata.get("source") == "web_search":
+#        context = "Information from web search:\n" + context
+    
+#     # 添加股票数据
+#     if "stock_data" in state and state["stock_data"]:
+#         stock_info = format_stock_info(state["stock_data"])
+#         context = stock_info + "\n" + context
+
+#     synthesized_response = response_synthesizer.invoke(
+#         {
+#             "question": state["query"],
+#             "context": context,
+#             "chat_history": get_chat_history(
+#                 convert_to_messages(state["messages"][:-1])
+#             ),
+#         }
+#     )
+#     feedback_urls = get_feedback_urls(config)
+#     return {
+#         "messages": [synthesized_response],
+#         "answer": synthesized_response.content,
+#         "feedback_urls": feedback_urls,
+#         "query": state["query"],               # 保持状态
+#         "documents": state["documents"],       # 保持状态
+#         "stock_data": state.get("stock_data")  # 保持状态
+#     }
+
 def synthesize_response(
     state: AgentState,
     config: RunnableConfig,
     model: LanguageModelLike,
     prompt_template: str,
 ) -> AgentState:
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", prompt_template),
-            ("placeholder", "{chat_history}"),
-            ("human", "{question}"),
-        ]
-    )
-    response_synthesizer = prompt | model
+    # 检查是否有文档
+    has_documents = bool(state.get("documents"))
     
-    # Include stock data in the context if available
+    # 修改 prompt 来处理不同情况
+    modified_prompt = prompt_template
+    if has_documents:
+        # 如果有文档，添加覆盖指令
+        modified_prompt += """
+        IMPORTANT OVERRIDE: 
+        - Relevant information has been found and provided in the context above
+        - You MUST use ONLY the information from the provided context
+        - Do NOT add the note about AI knowledge
+        - Do NOT use your own knowledge
+        """
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", modified_prompt),
+        ("placeholder", "{chat_history}"),
+        ("human", "{question}"),
+    ])
+    response_synthesizer = prompt | model
+
+    # 创建基础 context
     context = format_docs(state["documents"])
+    
+    # 检查是否是 web search 结果
+    if state.get("documents"):
+        is_web_search = any(
+            doc.metadata.get("type") == "web_search" 
+            for doc in state["documents"]
+        )
+        if is_web_search:
+            context = "Information from web search:\n" + context
+    
+    # 添加股票数据
     if "stock_data" in state and state["stock_data"]:
         stock_info = format_stock_info(state["stock_data"])
         context = stock_info + "\n" + context
@@ -380,14 +674,16 @@ def synthesize_response(
             ),
         }
     )
+    
     feedback_urls = get_feedback_urls(config)
     return {
         "messages": [synthesized_response],
         "answer": synthesized_response.content,
         "feedback_urls": feedback_urls,
+        "query": state["query"],               # 保持状态
+        "documents": state["documents"],       # 保持状态
+        "stock_data": state.get("stock_data")  # 保持状态
     }
-
-
 
 def synthesize_response_default(
     state: AgentState, config: RunnableConfig
@@ -409,6 +705,52 @@ def route_to_response_synthesizer(
     else:
         return "response_synthesizer"
 
+# 添加新的搜索引擎节点函数
+# def web_search_documents(state: AgentState) -> AgentState:
+
+#     messages = convert_to_messages(state["messages"])
+#     query = messages[-1].content
+#     state["query"] = query
+
+    
+#     tool = TavilySearchResults(
+#         max_results=5,
+#         search_depth="advanced",
+#         include_answer=True,
+#         include_raw_content=True,
+#         include_images=True,
+#         # include_domains=[...],
+#         # exclude_domains=[...],
+#         # name="...",            # overwrite default tool name
+#         # description="...",     # overwrite default tool description
+#         # args_schema=...,       # overwrite default args_schema: BaseModel
+#     )
+
+#     search_results = tool.invoke({"query": query})
+
+#     web_documents = []
+#     for result in search_results:
+#         content = ""
+#         if result.get('content'):
+#             content += f"Content: {result['content']}\n"
+#         if result.get('url'):
+#             content += f"URL: {result['url']}\n"
+        
+#         web_documents.append(
+#             Document(
+#                 page_content=content,
+#                 metadata={
+#                     "source": "web_search",
+#                     "title": result.get('title', ''),
+#                     "url": result.get('url', ''),
+#                 }
+#             )
+#         )
+    
+#     state["documents"] = web_documents
+#     return state
+    
+
 
 class Configuration(TypedDict):
     model_name: str
@@ -423,6 +765,7 @@ workflow = StateGraph(AgentState, Configuration, input=InputSchema)
 
 # define nodes
 workflow.add_node("stock_symbol_check", check_stock_symbols)
+# workflow.add_node("web_search", web_search_documents)
 workflow.add_node("retriever", retrieve_documents)
 workflow.add_node("retriever_with_chat_history", retrieve_documents_with_chat_history)
 workflow.add_node("response_synthesizer", synthesize_response_default)
@@ -432,13 +775,40 @@ workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
 workflow.set_entry_point("stock_symbol_check")
 
 # connect stock symbol check to retrievers
-workflow.add_conditional_edges("stock_symbol_check", route_to_retriever)
-
-# connect retrievers and response synthesizers
-workflow.add_conditional_edges("retriever", route_to_response_synthesizer)
 workflow.add_conditional_edges(
-    "retriever_with_chat_history", route_to_response_synthesizer
+    "stock_symbol_check",
+    route_to_retriever,
+    {
+        "retriever": "retriever",
+        "retriever_with_chat_history": "retriever_with_chat_history"
+    }
 )
+
+# 连接检索器到响应合成器
+workflow.add_conditional_edges(
+    "retriever",
+    route_to_response_synthesizer,
+    {
+        "response_synthesizer": "response_synthesizer",
+        "response_synthesizer_cohere": "response_synthesizer_cohere"
+    }
+)
+workflow.add_conditional_edges(
+    "retriever_with_chat_history",
+    route_to_response_synthesizer,
+    {
+        "response_synthesizer": "response_synthesizer",
+        "response_synthesizer_cohere": "response_synthesizer_cohere"
+    }
+)
+# workflow.add_conditional_edges(
+#     "web_search",
+#     route_to_response_synthesizer,
+#     {
+#         "response_synthesizer": "response_synthesizer",
+#         "response_synthesizer_cohere": "response_synthesizer_cohere"
+#     }
+# )
 
 # connect synthesizers to terminal node
 workflow.add_edge("response_synthesizer", END)
