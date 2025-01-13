@@ -311,6 +311,64 @@ def retrieve_documents(
     
     # 首先设置查询到状态中
     state["query"] = query
+
+     # 添加加密货币价格查询检测
+    def is_crypto_price_query(query: str) -> bool:
+        # 使用 LLM 判断是否是加密货币价格查询
+        prompt = """
+        Determine if this query is about cryptocurrency prices, market data, or trading information.
+        Query: {query}
+        Answer with only 'yes' or 'no'.
+        """.format(query=query)
+        
+        response = llm.invoke(prompt).content.lower().strip()
+        return 'yes' in response
+
+        # 如果是加密货币价格查询，直接使用 web search
+     if is_crypto_price_query(query):
+        print("Cryptocurrency price query detected, using web search...")
+        tool = TavilySearchResults(
+            max_results=5,
+            search_depth="advanced",
+            include_answer=True,
+            include_raw_content=True,
+            include_images=True,
+        )
+
+        # 优化搜索查询以获取最新价格数据
+        enhanced_query = f"latest {query} cryptocurrency price market data real time"
+        
+        tool_call = {
+            "args": {"query": enhanced_query},
+            "id": str(uuid.uuid4()),
+            "name": "tavily_search",
+            "type": "tool_call"
+        }
+        
+        tool_message = tool.invoke(tool_call)
+        search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+        results = eval(search_response['results'])
+        
+        web_documents = []
+        for result in results:
+            content = f"Content: {result['content']}\n"
+            if result.get('url'):
+                content += f"URL: {result['url']}\n"
+                
+            web_documents.append(
+                Document(
+                    page_content=content,
+                    metadata={
+                        "source": result.get('url', ''),
+                        "title": result.get('title', ''),
+                        "type": "web_search",
+                        "url": result.get('url', ''),
+                    }
+                )
+            )
+        
+        state["documents"] = web_documents
+        return state
     
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
@@ -437,6 +495,64 @@ def retrieve_documents_with_chat_history(
     
     # 设置查询到状态中
     state["query"] = query
+
+         # 添加加密货币价格查询检测
+    def is_crypto_price_query(query: str) -> bool:
+        # 使用 LLM 判断是否是加密货币价格查询
+        prompt = """
+        Determine if this query is about cryptocurrency prices, market data, or trading information.
+        Query: {query}
+        Answer with only 'yes' or 'no'.
+        """.format(query=query)
+        
+        response = llm.invoke(prompt).content.lower().strip()
+        return 'yes' in response
+
+        # 如果是加密货币价格查询，直接使用 web search
+     if is_crypto_price_query(query):
+        print("Cryptocurrency price query detected, using web search...")
+        tool = TavilySearchResults(
+            max_results=5,
+            search_depth="advanced",
+            include_answer=True,
+            include_raw_content=True,
+            include_images=True,
+        )
+
+        # 优化搜索查询以获取最新价格数据
+        enhanced_query = f"latest {query} cryptocurrency price market data real time"
+        
+        tool_call = {
+            "args": {"query": enhanced_query},
+            "id": str(uuid.uuid4()),
+            "name": "tavily_search",
+            "type": "tool_call"
+        }
+        
+        tool_message = tool.invoke(tool_call)
+        search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+        results = eval(search_response['results'])
+        
+        web_documents = []
+        for result in results:
+            content = f"Content: {result['content']}\n"
+            if result.get('url'):
+                content += f"URL: {result['url']}\n"
+                
+            web_documents.append(
+                Document(
+                    page_content=content,
+                    metadata={
+                        "source": result.get('url', ''),
+                        "title": result.get('title', ''),
+                        "type": "web_search",
+                        "url": result.get('url', ''),
+                    }
+                )
+            )
+        
+        state["documents"] = web_documents
+        return state
     
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
@@ -681,24 +797,6 @@ def synthesize_response(
 ) -> AgentState:
     # 检查是否有文档
     has_documents = bool(state.get("documents"))
-
-    # 如果是加密货币相关查询但没有 web search 结果
-    if not has_documents:
-        # 让 LLM 判断是否是加密货币相关查询
-        crypto_check_prompt = """
-        Is this query related to cryptocurrencies, blockchain, or digital assets? 
-        Answer with only 'yes' or 'no'.
-        Query: {query}
-        """.format(query=query)
-        
-        is_crypto_query = 'yes' in model.invoke(crypto_check_prompt).content.lower()
-        
-        if is_crypto_query:
-            return {
-                "messages": [AIMessage(content="This query requires real-time cryptocurrency data. Please let me search the web for the latest information.")],
-                "answer": "This query requires real-time cryptocurrency data. Please let me search the web for the latest information.",
-                "should_use_web_search": True  # 添加标志以触发 web search
-            }
     
     # 修改 prompt 来处理不同情况
     modified_prompt = prompt_template
@@ -883,15 +981,7 @@ workflow.add_conditional_edges(
 # )
 
 # connect synthesizers to terminal node
-# workflow.add_edge("response_synthesizer", END)
-workflow.add_conditional_edges(
-    "response_synthesizer",
-    lambda state: "web_search" if state.get("should_use_web_search") else "done",
-    {
-        "web_search": "retriever",  # 如果需要 web search，重新执行检索
-        "end": "end"  # 使用显式的结束节点而不是 None
-    }
-)
+workflow.add_edge("response_synthesizer", END)
 workflow.add_edge("response_synthesizer_cohere", END)
 
 graph = workflow.compile()
