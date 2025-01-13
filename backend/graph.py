@@ -37,6 +37,7 @@ from langsmith import Client as LangsmithClient
 from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
 from langchain_community.tools import TavilySearchResults
 from langchain.schema import Document
+from langchain.callbacks.manager import CallbackManager, RunManager
 
 from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
