@@ -681,6 +681,24 @@ def synthesize_response(
 ) -> AgentState:
     # 检查是否有文档
     has_documents = bool(state.get("documents"))
+
+    # 如果是加密货币相关查询但没有 web search 结果
+    if not has_documents:
+        # 让 LLM 判断是否是加密货币相关查询
+        crypto_check_prompt = """
+        Is this query related to cryptocurrencies, blockchain, or digital assets? 
+        Answer with only 'yes' or 'no'.
+        Query: {query}
+        """.format(query=query)
+        
+        is_crypto_query = 'yes' in model.invoke(crypto_check_prompt).content.lower()
+        
+        if is_crypto_query:
+            return {
+                "messages": [AIMessage(content="This query requires real-time cryptocurrency data. Please let me search the web for the latest information.")],
+                "answer": "This query requires real-time cryptocurrency data. Please let me search the web for the latest information.",
+                "should_use_web_search": True  # 添加标志以触发 web search
+            }
     
     # 修改 prompt 来处理不同情况
     modified_prompt = prompt_template
@@ -864,7 +882,15 @@ workflow.add_conditional_edges(
 # )
 
 # connect synthesizers to terminal node
-workflow.add_edge("response_synthesizer", END)
+# workflow.add_edge("response_synthesizer", END)
+workflow.add_conditional_edges(
+    "response_synthesizer",
+    lambda state: "web_search" if state.get("should_use_web_search") else "done",
+    {
+        "web_search": "retriever",  # 如果需要 web search，重新执行检索
+        "done": None  # 完成响应
+    }
+)
 workflow.add_edge("response_synthesizer_cohere", END)
 
 graph = workflow.compile()
