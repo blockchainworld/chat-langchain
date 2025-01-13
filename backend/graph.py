@@ -305,31 +305,28 @@ def format_docs(docs: Sequence[Document]) -> str:
         formatted_docs.append(doc_string)
     return "\n".join(formatted_docs)
 
-def log_event(callbacks, message, metadata=None):
+def log_event(callbacks, message: str, metadata: Optional[Dict[str, Any]] = None):
     """统一的日志记录函数"""
     if callbacks:
-        # 处理单个 callback manager 的情况
         if hasattr(callbacks, 'on_text'):
             callbacks.on_text(f"\n{message}")
             if metadata:
                 callbacks.on_text(f"\nMetadata: {json.dumps(metadata, indent=2)}")
-        # 处理 callback 列表的情况
         elif isinstance(callbacks, list) and callbacks:
-            run_manager = callbacks[0]
-            if hasattr(run_manager, 'on_text'):
-                run_manager.on_text(f"\n{message}")
+            callback = callbacks[0]
+            if hasattr(callback, 'on_text'):
+                callback.on_text(f"\n{message}")
                 if metadata:
-                    run_manager.on_text(f"\nMetadata: {json.dumps(metadata, indent=2)}")
-        # 打印到控制台作为后备选项
+                    callback.on_text(f"\nMetadata: {json.dumps(metadata, indent=2)}")
         else:
             print(f"\n{message}")
             if metadata:
                 print(f"Metadata: {json.dumps(metadata, indent=2)}")
 
-def get_crypto_data(run_manager: Optional[RunManager] = None):
+def get_crypto_data(callbacks=None):
     """获取加密货币数据并创建文档"""
     try:
-        log_event(run_manager, "🚀 Starting Binance API request")
+        log_event(callbacks, "🚀 Starting Binance API request")
         start_time = time.time()
         
         url = "https://api.binance.com/api/v3/ticker/24hr"
@@ -337,7 +334,7 @@ def get_crypto_data(run_manager: Optional[RunManager] = None):
         response.raise_for_status()
         
         request_time = time.time() - start_time
-        log_event(run_manager, "📡 API request completed", {
+        log_event(callbacks, "📡 API request completed", {
             "status_code": response.status_code,
             "request_time": f"{request_time:.2f}s"
         })
@@ -346,17 +343,19 @@ def get_crypto_data(run_manager: Optional[RunManager] = None):
         web_documents = []
         usdt_pairs = 0
         
-        log_event(run_manager, "🔄 Processing cryptocurrency data")
+        log_event(callbacks, "🔄 Processing cryptocurrency data")
         for item in data:
             if item['symbol'].endswith('USDT'):
                 usdt_pairs += 1
-                content = (
-                    f"Symbol: {item['symbol']}\n"
-                    f"Price: ${float(item['lastPrice']):.2f}\n"
-                    f"24h Change: {float(item['priceChangePercent'])}%"
-                )
+                symbol = item['symbol']
+                display_symbol = symbol.replace('USDT', '/USDT')
                 
-                display_symbol = item['symbol'].replace('USDT', '')
+                content = (
+                    f"Symbol: {symbol}\n"
+                    f"Price: ${float(item['lastPrice']):.2f}\n"
+                    f"24h Change: {float(item['priceChangePercent'])}%\n"
+                    f"24h Volume: ${float(item['volume']):.2f}"
+                )
                 
                 web_documents.append(
                     Document(
@@ -372,7 +371,7 @@ def get_crypto_data(run_manager: Optional[RunManager] = None):
         
         web_documents.sort(key=lambda x: x.metadata['volume'], reverse=True)
         
-        log_event(run_manager, "✅ Data processing completed", {
+        log_event(callbacks, "✅ Data processing completed", {
             "total_pairs": len(data),
             "usdt_pairs": usdt_pairs,
             "processed_pairs": len(web_documents)
@@ -381,12 +380,17 @@ def get_crypto_data(run_manager: Optional[RunManager] = None):
         return web_documents
 
     except Exception as e:
-        log_event(run_manager, "❌ Error fetching Binance data", {
+        log_event(callbacks, "❌ Error fetching Binance data", {
             "error_type": type(e).__name__,
             "error_message": str(e)
         })
         return None
-        
+
+def convert_to_messages(messages: List[Dict[str, Any]]) -> List[BaseMessage]:
+    """转换消息格式"""
+    return messages
+
+
 def retrieve_documents(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
@@ -397,7 +401,7 @@ def retrieve_documents(
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
     
-    log_event(run_manager, "🔍 Starting document retrieval", {
+    log_event(callbacks, "🔍 Starting document retrieval", {
         "query": query
     })
     
@@ -410,29 +414,29 @@ def retrieve_documents(
         Answer with only 'yes' or 'no'.
         """.format(query=query)
         
-        log_event(run_manager, "🤔 Checking if query is crypto related")
+        log_event(callbacks, "🤔 Checking if query is crypto related")
         response = llm.invoke(prompt).content.lower().strip()
-        log_event(run_manager, f"✍️ Query classification result: {response}")
+        log_event(callbacks, f"✍️ Query classification result: {response}")
         return 'yes' in response
 
     if is_crypto_price_query(query):
-        log_event(run_manager, "💰 Cryptocurrency price query detected")
+        log_event(callbacks, "💰 Cryptocurrency price query detected")
         retry_count = 3
         crypto_documents = None
         
         for attempt in range(retry_count):
             try:
-                log_event(run_manager, f"🔄 Attempt {attempt + 1} of {retry_count}", {
+                log_event(callbacks, f"🔄 Attempt {attempt + 1} of {retry_count}", {
                     "attempt": attempt + 1,
                     "total_attempts": retry_count
                 })
                 
                 start_time = time.time()
-                crypto_documents = get_crypto_data()
+                crypto_documents = get_crypto_data(callbacks)
                 attempt_time = time.time() - start_time
                 
                 if crypto_documents and len(crypto_documents) > 0:
-                    log_event(run_manager, "✅ Successfully retrieved crypto data", {
+                    log_event(callbacks, "✅ Successfully retrieved crypto data", {
                         "document_count": len(crypto_documents),
                         "attempt": attempt + 1,
                         "time_taken": f"{attempt_time:.2f}s"
@@ -440,12 +444,12 @@ def retrieve_documents(
                     state["documents"] = crypto_documents
                     return state
                 else:
-                    log_event(run_manager, f"⚠️ No data returned from Binance API", {
+                    log_event(callbacks, f"⚠️ No data returned from Binance API", {
                         "attempt": attempt + 1
                     })
                     
             except Exception as e:
-                log_event(run_manager, "❌ Error fetching Binance data", {
+                log_event(callbacks, "❌ Error fetching Binance data", {
                     "attempt": attempt + 1,
                     "error_type": type(e).__name__,
                     "error_message": str(e)
@@ -453,12 +457,12 @@ def retrieve_documents(
             
             if attempt < retry_count - 1:
                 wait_time = 5
-                log_event(run_manager, "⏳ Waiting before retry", {
+                log_event(callbacks, "⏳ Waiting before retry", {
                     "wait_time": f"{wait_time}s"
                 })
                 time.sleep(wait_time)
         
-        log_event(run_manager, "🔄 Falling back to web search")
+        log_event(callbacks, "🔄 Falling back to web search")
         tool = TavilySearchResults(
             max_results=5,
             search_depth="advanced",
@@ -468,7 +472,7 @@ def retrieve_documents(
         )
 
         enhanced_query = f"latest {query} cryptocurrency price market data real time"
-        log_event(run_manager, "🔍 Enhanced search query", {
+        log_event(callbacks, "🔍 Enhanced search query", {
             "original_query": query,
             "enhanced_query": enhanced_query
         })
@@ -480,12 +484,12 @@ def retrieve_documents(
             "type": "tool_call"
         }
         
-        log_event(run_manager, "🌐 Executing web search")
+        log_event(callbacks, "🌐 Executing web search")
         tool_message = tool.invoke(tool_call)
         search_response = {k: str(v) for k, v in tool_message.artifact.items()}
         results = eval(search_response['results'])
         
-        log_event(run_manager, "📝 Processing search results", {
+        log_event(callbacks, "📝 Processing search results", {
             "result_count": len(results)
         })
         
@@ -508,17 +512,17 @@ def retrieve_documents(
             )
         
         if web_documents:
-            log_event(run_manager, "✅ Web search successful", {
+            log_event(callbacks, "✅ Web search successful", {
                 "document_count": len(web_documents)
             })
             state["documents"] = web_documents
         else:
-            log_event(run_manager, "⚠️ No results found from web search")
+            log_event(callbacks, "⚠️ No results found from web search")
             state["documents"] = []
         
         return state
     
-    log_event(run_manager, "📚 Using local retriever")
+    log_event(callbacks, "📚 Using local retriever")
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
         
@@ -526,9 +530,9 @@ def retrieve_documents(
         
         if not relevant_documents:
             should_use_web_search = True
-            log_event(run_manager, "⚠️ No documents found in local retriever")
+            log_event(callbacks, "⚠️ No documents found in local retriever")
         else:
-            log_event(run_manager, "🔍 Checking document relevance")
+            log_event(callbacks, "🔍 Checking document relevance")
             relevant_count = 0
             high_quality_docs = []
             
@@ -552,19 +556,19 @@ def retrieve_documents(
                 high_quality_docs.append(doc)
                 relevant_count += 1
             
-            log_event(run_manager, "📊 Document quality check complete", {
+            log_event(callbacks, "📊 Document quality check complete", {
                 "total_documents": len(relevant_documents),
                 "high_quality_documents": relevant_count
             })
             
             if relevant_count < 2:
                 should_use_web_search = True
-                log_event(run_manager, "⚠️ Insufficient high-quality documents")
+                log_event(callbacks, "⚠️ Insufficient high-quality documents")
             else:
                 relevant_documents = high_quality_docs
         
         if should_use_web_search:
-            log_event(run_manager, "🌐 Falling back to web search")
+            log_event(callbacks, "🌐 Falling back to web search")
             tool = TavilySearchResults(
                 max_results=5,
                 search_depth="advanced",
@@ -580,7 +584,7 @@ def retrieve_documents(
                 "type": "tool_call"
             }
             
-            log_event(run_manager, "🔍 Executing web search")
+            log_event(callbacks, "🔍 Executing web search")
             tool_message = tool.invoke(tool_call)
             search_response = {k: str(v) for k, v in tool_message.artifact.items()}
             results = eval(search_response['results'])
@@ -608,16 +612,16 @@ def retrieve_documents(
                 )
             
             if web_documents:
-                log_event(run_manager, "✅ Web search successful", {
+                log_event(callbacks, "✅ Web search successful", {
                     "document_count": len(web_documents)
                 })
                 state["documents"] = web_documents
             else:
-                log_event(run_manager, "⚠️ No results found from web search")
+                log_event(callbacks, "⚠️ No results found from web search")
                 state["documents"] = []
                     
         else:
-            log_event(run_manager, "✅ Using local retriever results", {
+            log_event(callbacks, "✅ Using local retriever results", {
                 "document_count": len(relevant_documents)
             })
             state["documents"] = relevant_documents
