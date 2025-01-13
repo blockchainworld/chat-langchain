@@ -308,8 +308,8 @@ def get_crypto_data():
         ticker_url = "https://api.binance.com/api/v3/ticker/24hr"
         price_url = "https://api.binance.com/api/v3/ticker/price"
         
-        ticker_response = requests.get(ticker_url, timeout=10)
-        price_response = requests.get(price_url, timeout=10)
+        ticker_response = requests.get(ticker_url, timeout=30)
+        price_response = requests.get(price_url, timeout=30)
         
         ticker_data = {item['symbol']: item for item in ticker_response.json()}
         price_data = {item['symbol']: item for item in price_response.json()}
@@ -407,7 +407,7 @@ def retrieve_documents(
             
             # 如果还有重试机会，等待后继续
             if attempt < retry_count - 1:
-                wait_time = 5  # 增加等待时间到5秒
+                wait_time = 10  # 增加等待时间到5秒
                 print(f"Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
         
