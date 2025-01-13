@@ -939,7 +939,6 @@ workflow.add_node("retriever", retrieve_documents)
 workflow.add_node("retriever_with_chat_history", retrieve_documents_with_chat_history)
 workflow.add_node("response_synthesizer", synthesize_response_default)
 workflow.add_node("response_synthesizer_cohere", synthesize_response_cohere)
-workflow.add_node("end", lambda x: x)  # 添加一个结束节点
 
 # set entry point to stock symbol check
 workflow.set_entry_point("stock_symbol_check")
