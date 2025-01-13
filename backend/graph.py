@@ -81,7 +81,7 @@ For ANY questions related to cryptocurrencies that involve:
 - Trading pairs
 - Market trends
 - Token metrics
-You MUST use web search results for the most current data. This applies to ALL types of cryptocurrencies, tokens, and digital assets including but not limited to:
+You MUST use the most current data. This applies to ALL types of cryptocurrencies, tokens, and digital assets including but not limited to:
 - Major cryptocurrencies (Bitcoin, Ethereum, etc.)
 - Altcoins and DeFi tokens
 - Meme coins and NFT projects
@@ -307,8 +307,8 @@ def get_crypto_data():
         ticker_url = "https://api.binance.com/api/v3/ticker/24hr"
         price_url = "https://api.binance.com/api/v3/ticker/price"
         
-        ticker_response = requests.get(ticker_url)
-        price_response = requests.get(price_url)
+        ticker_response = requests.get(ticker_url, timeout=10)
+        price_response = requests.get(price_url, timeout=10)
         
         ticker_data = {item['symbol']: item for item in ticker_response.json()}
         price_data = {item['symbol']: item for item in price_response.json()}
@@ -372,9 +372,8 @@ def retrieve_documents(
     # 首先设置查询到状态中
     state["query"] = query
 
-     # 添加加密货币价格查询检测
+    # 添加加密货币价格查询检测
     def is_crypto_price_query(query: str) -> bool:
-        # 使用 LLM 判断是否是加密货币价格查询
         prompt = """
         Determine if this query is about cryptocurrency prices, market data, or trading information.
         Query: {query}
@@ -384,68 +383,91 @@ def retrieve_documents(
         response = llm.invoke(prompt).content.lower().strip()
         return 'yes' in response
 
-        
+    # 如果是加密货币查询    
     if is_crypto_price_query(query):
-        print("Cryptocurrency price query detected, fetching real-time data...")
-        crypto_documents = get_crypto_data()
+        print("Cryptocurrency price query detected, attempting to fetch Binance data...")
+        retry_count = 3
+        crypto_documents = None
+        
+        # 添加重试机制
+        for attempt in range(retry_count):
+            try:
+                print(f"Attempt {attempt + 1} of {retry_count} to fetch Binance data")
+                crypto_documents = get_crypto_data()
+                
+                if crypto_documents and len(crypto_documents) > 0:
+                    print(f"Successfully retrieved {len(crypto_documents)} cryptocurrency pairs from Binance")
+                    state["documents"] = crypto_documents
+                    return state
+                else:
+                    print(f"No data returned from Binance API (attempt {attempt + 1})")
+            except Exception as e:
+                print(f"Error fetching Binance data (attempt {attempt + 1}): {str(e)}")
+            
+            # 如果还有重试机会，等待后继续
+            if attempt < retry_count - 1:
+                wait_time = 5  # 增加等待时间到5秒
+                print(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+        
+        # 所有币安API尝试都失败后，使用web search
+        print("All attempts to fetch Binance data failed, falling back to web search...")
+        tool = TavilySearchResults(
+            max_results=5,
+            search_depth="advanced",
+            include_answer=True,
+            include_raw_content=True,
+            include_images=True,
+        )
 
-        if crypto_documents:
-            print("Successfully retrieved real-time cryptocurrency data")
-            state["documents"] = crypto_documents
-            return state
-        else:
-            print("Cryptocurrency price query detected, using web search...")
-            tool = TavilySearchResults(
-                max_results=5,
-                search_depth="advanced",
-                include_answer=True,
-                include_raw_content=True,
-                include_images=True,
-            )
-    
-            # 优化搜索查询以获取最新价格数据
-            enhanced_query = f"latest {query} cryptocurrency price market data real time"
-            
-            tool_call = {
-                "args": {"query": enhanced_query},
-                "id": str(uuid.uuid4()),
-                "name": "tavily_search",
-                "type": "tool_call"
-            }
-            
-            tool_message = tool.invoke(tool_call)
-            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
-            results = eval(search_response['results'])
-            
-            web_documents = []
-            for result in results:
-                content = f"Content: {result['content']}\n"
-                if result.get('url'):
-                    content += f"URL: {result['url']}\n"
-                    
-                web_documents.append(
-                    Document(
-                        page_content=content,
-                        metadata={
-                            "source": result.get('url', ''),
-                            "title": result.get('title', ''),
-                            "type": "web_search",
-                            "url": result.get('url', ''),
-                        }
-                    )
+        # 优化搜索查询以获取最新价格数据
+        enhanced_query = f"latest {query} cryptocurrency price market data real time"
+        
+        tool_call = {
+            "args": {"query": enhanced_query},
+            "id": str(uuid.uuid4()),
+            "name": "tavily_search",
+            "type": "tool_call"
+        }
+        
+        tool_message = tool.invoke(tool_call)
+        search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+        results = eval(search_response['results'])
+        
+        web_documents = []
+        for result in results:
+            content = f"Content: {result['content']}\n"
+            if result.get('url'):
+                content += f"URL: {result['url']}\n"
+                
+            web_documents.append(
+                Document(
+                    page_content=content,
+                    metadata={
+                        "source": result.get('url', ''),
+                        "title": result.get('title', ''),
+                        "type": "web_search",
+                        "url": result.get('url', ''),
+                    }
                 )
-            
+            )
+        
+        if web_documents:
+            print("Found results from web search")
             state["documents"] = web_documents
-            return state
+        else:
+            print("No results found from web search")
+            state["documents"] = []
+        
+        return state
     
-    # 先尝试本地检索
+    # 如果不是加密货币查询，使用原有的本地检索逻辑
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
         
         # 检查文档相关性
         should_use_web_search = False
         
-        # 如果完全没有文档
         if not relevant_documents:
             should_use_web_search = True
             print("No documents found in local retriever")
@@ -455,40 +477,31 @@ def retrieve_documents(
             high_quality_docs = []
             
             for doc in relevant_documents:
-                # 相关性评分检查（提高阈值到0.7）
                 score = getattr(doc, 'score', None)
-                if score and score < 0.7:  # 提高相关性阈值
+                if score and score < 0.7:
                     continue
                 
-                # 内容质量检查
                 content = doc.page_content.strip()
                 
-                # 检查文档内容长度（增加到100个字符）
                 if len(content) < 100:
                     continue
                 
-                # 检查内容是否包含关键词（可以根据query提取关键词）
                 query_words = set(query.lower().split())
                 content_words = set(content.lower().split())
                 word_overlap = len(query_words.intersection(content_words))
                 
-                # 要求至少有30%的查询关键词出现在文档中
                 if word_overlap / len(query_words) < 0.3:
                     continue
                 
-                # 通过所有检查的文档被认为是高质量的
                 high_quality_docs.append(doc)
                 relevant_count += 1
             
-            # 提高所需的相关文档数量到2
             if relevant_count < 2:
                 should_use_web_search = True
                 print(f"Only found {relevant_count} relevant documents, not enough. Trying web search...")
             else:
-                # 只保留高质量文档
                 relevant_documents = high_quality_docs
         
-        # 如果需要使用web搜索
         if should_use_web_search:
             print("Using web search for better results...")
             tool = TavilySearchResults(
@@ -506,10 +519,9 @@ def retrieve_documents(
                 "type": "tool_call"
             }
             
-            # 获取 ToolMessage 对象并解析内容
             tool_message = tool.invoke(tool_call)
             search_response = {k: str(v) for k, v in tool_message.artifact.items()}
-            results= eval(search_response['results'])
+            results = eval(search_response['results'])
 
             web_documents = []
             for result in results:
