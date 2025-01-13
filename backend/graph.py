@@ -325,7 +325,7 @@ def retrieve_documents(
         return 'yes' in response
 
         # 如果是加密货币价格查询，直接使用 web search
-     if is_crypto_price_query(query):
+    if is_crypto_price_query(query):
         print("Cryptocurrency price query detected, using web search...")
         tool = TavilySearchResults(
             max_results=5,
@@ -509,7 +509,7 @@ def retrieve_documents_with_chat_history(
         return 'yes' in response
 
         # 如果是加密货币价格查询，直接使用 web search
-     if is_crypto_price_query(query):
+    if is_crypto_price_query(query):
         print("Cryptocurrency price query detected, using web search...")
         tool = TavilySearchResults(
             max_results=5,
