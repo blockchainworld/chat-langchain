@@ -6,7 +6,7 @@ import ast
 import time
 import requests
 from collections import defaultdict
-from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict
+from typing import Annotated, Iterator, Literal, Optional, Sequence, TypedDict, Dict, Any, List, Union
 
 import weaviate
 from langchain_anthropic import ChatAnthropic
