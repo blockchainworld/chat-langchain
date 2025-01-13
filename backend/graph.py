@@ -303,65 +303,43 @@ def format_docs(docs: Sequence[Document]) -> str:
     return "\n".join(formatted_docs)
 
 def get_crypto_data():
+    """优化后的加密货币数据获取函数"""
     try:
-        # 获取24小时价格统计
-        ticker_url = "https://api.binance.com/api/v3/ticker/24hr"
-        price_url = "https://api.binance.com/api/v3/ticker/price"
-        
-        ticker_response = requests.get(ticker_url, timeout=30)
-        price_response = requests.get(price_url, timeout=30)
-        
-        ticker_data = {item['symbol']: item for item in ticker_response.json()}
-        price_data = {item['symbol']: item for item in price_response.json()}
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        response = requests.get(url, timeout=10)  # 减少超时时间
+        data = response.json()
         
         web_documents = []
-        for symbol, data in ticker_data.items():
-            if symbol.endswith('USDT'):
-                current_price = price_data.get(symbol, {}).get('price', '0')
-                
+        for item in data:
+            if item['symbol'].endswith('USDT'):
+                # 只保留关键信息
                 content = (
-                    f"Symbol: {symbol}\n"
-                    f"Current Price: ${float(current_price):.8f}\n"
-                    f"24h Volume: {float(data.get('volume', 0)):.2f}\n"
-                    f"24h Price Change: {float(data.get('priceChangePercent', 0)):.2f}%\n"
-                    f"24h High: ${float(data.get('highPrice', 0)):.8f}\n"
-                    f"24h Low: ${float(data.get('lowPrice', 0)):.8f}\n"
-                    f"Last Update: {datetime.now().isoformat()}\n"
-                    f"Quote Asset Volume: {float(data.get('quoteVolume', 0)):.2f}\n"
-                    f"Number of Trades: {data.get('count', 0)}\n"
-                    f"Price Change: ${float(data.get('priceChange', 0)):.8f}\n"
-                    f"Weighted Average Price: ${float(data.get('weightedAvgPrice', 0)):.8f}\n"
+                    f"Symbol: {item['symbol']}\n"
+                    f"Price: ${float(item['lastPrice']):.2f}\n"
+                    f"24h Change: {float(item['priceChangePercent'])}%"
                 )
                 
-                # 去掉USDT后缀用于显示
-                display_symbol = symbol.replace('USDT', '')
+                display_symbol = item['symbol'].replace('USDT', '')
                 
                 web_documents.append(
                     Document(
                         page_content=content,
                         metadata={
-                            "source": "https://www.binance.com/",
-                            "title": f"Real-time {display_symbol}/USDT Price Data from Binance",
-                            "type": "crypto_price_data",
-                            "url": f"https://www.binance.com/en/trade/{symbol}",
-                            "symbol": symbol,
-                            "volume": float(data.get('volume', 0))
+                            "source": "binance",
+                            "symbol": display_symbol,
+                            "price": float(item['lastPrice']),
+                            "volume": float(item['volume'])
                         }
                     )
                 )
         
-        # 按24小时交易量排序，但返回所有结果
-        web_documents.sort(
-            key=lambda x: x.metadata['volume'],
-            reverse=True
-        )
-        
-        return web_documents  # 返回所有交易对
-        
+        # 按交易量排序
+        web_documents.sort(key=lambda x: x.metadata['volume'], reverse=True)
+        return web_documents
+
     except Exception as e:
         print(f"Error fetching Binance data: {e}")
         return None
-
 
 def retrieve_documents(
     state: AgentState, *, config: Optional[RunnableConfig] = None
@@ -407,7 +385,7 @@ def retrieve_documents(
             
             # 如果还有重试机会，等待后继续
             if attempt < retry_count - 1:
-                wait_time = 10  # 增加等待时间到5秒
+                wait_time = 5  # 增加等待时间到5秒
                 print(f"Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
         
