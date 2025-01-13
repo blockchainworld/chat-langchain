@@ -36,6 +36,7 @@ from langgraph.graph import END, StateGraph, add_messages
 from langsmith import Client as LangsmithClient
 from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
 from langchain_community.tools import TavilySearchResults
+from langchain.schema import Document
 
 from backend.constants import WEAVIATE_DOCS_INDEX_NAME
 from backend.ingest import get_embeddings_model
@@ -303,17 +304,37 @@ def format_docs(docs: Sequence[Document]) -> str:
         formatted_docs.append(doc_string)
     return "\n".join(formatted_docs)
 
-def get_crypto_data():
-    """优化后的加密货币数据获取函数"""
+def log_event(run_manager: Optional[RunManager], message: str, metadata: Dict[str, Any] = None):
+    """记录事件到 LangSmith"""
+    if run_manager:
+        run_manager.on_text(f"\n{message}")
+        if metadata:
+            run_manager.on_text(f"\nMetadata: {json.dumps(metadata, indent=2)}")
+
+def get_crypto_data(run_manager: Optional[RunManager] = None):
+    """获取加密货币数据并创建文档"""
     try:
-        url = "https://api.binance.com/api/v3/ticker/24hr"
-        response = requests.get(url, timeout=10)  # 减少超时时间
-        data = response.json()
+        log_event(run_manager, "🚀 Starting Binance API request")
+        start_time = time.time()
         
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        request_time = time.time() - start_time
+        log_event(run_manager, "📡 API request completed", {
+            "status_code": response.status_code,
+            "request_time": f"{request_time:.2f}s"
+        })
+
+        data = response.json()
         web_documents = []
+        usdt_pairs = 0
+        
+        log_event(run_manager, "🔄 Processing cryptocurrency data")
         for item in data:
             if item['symbol'].endswith('USDT'):
-                # 只保留关键信息
+                usdt_pairs += 1
                 content = (
                     f"Symbol: {item['symbol']}\n"
                     f"Price: ${float(item['lastPrice']):.2f}\n"
@@ -334,25 +355,39 @@ def get_crypto_data():
                     )
                 )
         
-        # 按交易量排序
         web_documents.sort(key=lambda x: x.metadata['volume'], reverse=True)
+        
+        log_event(run_manager, "✅ Data processing completed", {
+            "total_pairs": len(data),
+            "usdt_pairs": usdt_pairs,
+            "processed_pairs": len(web_documents)
+        })
+        
         return web_documents
 
     except Exception as e:
-        print(f"Error fetching Binance data: {e}")
+        log_event(run_manager, "❌ Error fetching Binance data", {
+            "error_type": type(e).__name__,
+            "error_message": str(e)
+        })
         return None
-
+        
 def retrieve_documents(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
+    # 获取 run_manager 用于记录日志
+    run_manager = config.get("callbacks", [None])[0] if config else None
+    
     config = ensure_config(config)
     messages = convert_to_messages(state["messages"])
     query = messages[-1].content
     
-    # 首先设置查询到状态中
+    log_event(run_manager, "🔍 Starting document retrieval", {
+        "query": query
+    })
+    
     state["query"] = query
 
-    # 添加加密货币价格查询检测
     def is_crypto_price_query(query: str) -> bool:
         prompt = """
         Determine if this query is about cryptocurrency prices, market data, or trading information.
@@ -360,38 +395,55 @@ def retrieve_documents(
         Answer with only 'yes' or 'no'.
         """.format(query=query)
         
+        log_event(run_manager, "🤔 Checking if query is crypto related")
         response = llm.invoke(prompt).content.lower().strip()
+        log_event(run_manager, f"✍️ Query classification result: {response}")
         return 'yes' in response
 
-    # 如果是加密货币查询    
     if is_crypto_price_query(query):
-        print("Cryptocurrency price query detected, attempting to fetch Binance data...")
+        log_event(run_manager, "💰 Cryptocurrency price query detected")
         retry_count = 3
         crypto_documents = None
         
-        # 添加重试机制
         for attempt in range(retry_count):
             try:
-                print(f"Attempt {attempt + 1} of {retry_count} to fetch Binance data")
+                log_event(run_manager, f"🔄 Attempt {attempt + 1} of {retry_count}", {
+                    "attempt": attempt + 1,
+                    "total_attempts": retry_count
+                })
+                
+                start_time = time.time()
                 crypto_documents = get_crypto_data()
+                attempt_time = time.time() - start_time
                 
                 if crypto_documents and len(crypto_documents) > 0:
-                    print(f"Successfully retrieved {len(crypto_documents)} cryptocurrency pairs from Binance")
+                    log_event(run_manager, "✅ Successfully retrieved crypto data", {
+                        "document_count": len(crypto_documents),
+                        "attempt": attempt + 1,
+                        "time_taken": f"{attempt_time:.2f}s"
+                    })
                     state["documents"] = crypto_documents
                     return state
                 else:
-                    print(f"No data returned from Binance API (attempt {attempt + 1})")
+                    log_event(run_manager, f"⚠️ No data returned from Binance API", {
+                        "attempt": attempt + 1
+                    })
+                    
             except Exception as e:
-                print(f"Error fetching Binance data (attempt {attempt + 1}): {str(e)}")
+                log_event(run_manager, "❌ Error fetching Binance data", {
+                    "attempt": attempt + 1,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e)
+                })
             
-            # 如果还有重试机会，等待后继续
             if attempt < retry_count - 1:
-                wait_time = 5  # 增加等待时间到5秒
-                print(f"Waiting {wait_time} seconds before retry...")
+                wait_time = 5
+                log_event(run_manager, "⏳ Waiting before retry", {
+                    "wait_time": f"{wait_time}s"
+                })
                 time.sleep(wait_time)
         
-        # 所有币安API尝试都失败后，使用web search
-        print("All attempts to fetch Binance data failed, falling back to web search...")
+        log_event(run_manager, "🔄 Falling back to web search")
         tool = TavilySearchResults(
             max_results=5,
             search_depth="advanced",
@@ -400,8 +452,11 @@ def retrieve_documents(
             include_images=True,
         )
 
-        # 优化搜索查询以获取最新价格数据
         enhanced_query = f"latest {query} cryptocurrency price market data real time"
+        log_event(run_manager, "🔍 Enhanced search query", {
+            "original_query": query,
+            "enhanced_query": enhanced_query
+        })
         
         tool_call = {
             "args": {"query": enhanced_query},
@@ -410,9 +465,14 @@ def retrieve_documents(
             "type": "tool_call"
         }
         
+        log_event(run_manager, "🌐 Executing web search")
         tool_message = tool.invoke(tool_call)
         search_response = {k: str(v) for k, v in tool_message.artifact.items()}
         results = eval(search_response['results'])
+        
+        log_event(run_manager, "📝 Processing search results", {
+            "result_count": len(results)
+        })
         
         web_documents = []
         for result in results:
@@ -433,26 +493,27 @@ def retrieve_documents(
             )
         
         if web_documents:
-            print("Found results from web search")
+            log_event(run_manager, "✅ Web search successful", {
+                "document_count": len(web_documents)
+            })
             state["documents"] = web_documents
         else:
-            print("No results found from web search")
+            log_event(run_manager, "⚠️ No results found from web search")
             state["documents"] = []
         
         return state
     
-    # 如果不是加密货币查询，使用原有的本地检索逻辑
+    log_event(run_manager, "📚 Using local retriever")
     with get_retriever(k=config["configurable"].get("k")) as retriever:
         relevant_documents = retriever.invoke(query)
         
-        # 检查文档相关性
         should_use_web_search = False
         
         if not relevant_documents:
             should_use_web_search = True
-            print("No documents found in local retriever")
+            log_event(run_manager, "⚠️ No documents found in local retriever")
         else:
-            # 使用更严格的相关性检查
+            log_event(run_manager, "🔍 Checking document relevance")
             relevant_count = 0
             high_quality_docs = []
             
@@ -476,14 +537,19 @@ def retrieve_documents(
                 high_quality_docs.append(doc)
                 relevant_count += 1
             
+            log_event(run_manager, "📊 Document quality check complete", {
+                "total_documents": len(relevant_documents),
+                "high_quality_documents": relevant_count
+            })
+            
             if relevant_count < 2:
                 should_use_web_search = True
-                print(f"Only found {relevant_count} relevant documents, not enough. Trying web search...")
+                log_event(run_manager, "⚠️ Insufficient high-quality documents")
             else:
                 relevant_documents = high_quality_docs
         
         if should_use_web_search:
-            print("Using web search for better results...")
+            log_event(run_manager, "🌐 Falling back to web search")
             tool = TavilySearchResults(
                 max_results=5,
                 search_depth="advanced",
@@ -499,6 +565,7 @@ def retrieve_documents(
                 "type": "tool_call"
             }
             
+            log_event(run_manager, "🔍 Executing web search")
             tool_message = tool.invoke(tool_call)
             search_response = {k: str(v) for k, v in tool_message.artifact.items()}
             results = eval(search_response['results'])
@@ -526,14 +593,18 @@ def retrieve_documents(
                 )
             
             if web_documents:
-                print("Found results from web search")
+                log_event(run_manager, "✅ Web search successful", {
+                    "document_count": len(web_documents)
+                })
                 state["documents"] = web_documents
             else:
-                print("No results found from web search")
+                log_event(run_manager, "⚠️ No results found from web search")
                 state["documents"] = []
                     
         else:
-            print(f"Found {len(relevant_documents)} high-quality relevant documents in local retriever")
+            log_event(run_manager, "✅ Using local retriever results", {
+                "document_count": len(relevant_documents)
+            })
             state["documents"] = relevant_documents
     
     return state
