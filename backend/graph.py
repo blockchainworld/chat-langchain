@@ -301,6 +301,66 @@ def format_docs(docs: Sequence[Document]) -> str:
         formatted_docs.append(doc_string)
     return "\n".join(formatted_docs)
 
+def get_crypto_data():
+    try:
+        # 获取24小时价格统计
+        ticker_url = "https://api.binance.com/api/v3/ticker/24hr"
+        price_url = "https://api.binance.com/api/v3/ticker/price"
+        
+        ticker_response = requests.get(ticker_url)
+        price_response = requests.get(price_url)
+        
+        ticker_data = {item['symbol']: item for item in ticker_response.json()}
+        price_data = {item['symbol']: item for item in price_response.json()}
+        
+        web_documents = []
+        for symbol, data in ticker_data.items():
+            if symbol.endswith('USDT'):
+                current_price = price_data.get(symbol, {}).get('price', '0')
+                
+                content = (
+                    f"Symbol: {symbol}\n"
+                    f"Current Price: ${float(current_price):.8f}\n"
+                    f"24h Volume: {float(data.get('volume', 0)):.2f}\n"
+                    f"24h Price Change: {float(data.get('priceChangePercent', 0)):.2f}%\n"
+                    f"24h High: ${float(data.get('highPrice', 0)):.8f}\n"
+                    f"24h Low: ${float(data.get('lowPrice', 0)):.8f}\n"
+                    f"Last Update: {datetime.now().isoformat()}\n"
+                    f"Quote Asset Volume: {float(data.get('quoteVolume', 0)):.2f}\n"
+                    f"Number of Trades: {data.get('count', 0)}\n"
+                    f"Price Change: ${float(data.get('priceChange', 0)):.8f}\n"
+                    f"Weighted Average Price: ${float(data.get('weightedAvgPrice', 0)):.8f}\n"
+                )
+                
+                # 去掉USDT后缀用于显示
+                display_symbol = symbol.replace('USDT', '')
+                
+                web_documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": "https://www.binance.com/",
+                            "title": f"Real-time {display_symbol}/USDT Price Data from Binance",
+                            "type": "crypto_price_data",
+                            "url": f"https://www.binance.com/en/trade/{symbol}",
+                            "symbol": symbol,
+                            "volume": float(data.get('volume', 0))
+                        }
+                    )
+                )
+        
+        # 按24小时交易量排序，但返回所有结果
+        web_documents.sort(
+            key=lambda x: x.metadata['volume'],
+            reverse=True
+        )
+        
+        return web_documents  # 返回所有交易对
+        
+    except Exception as e:
+        print(f"Error fetching Binance data: {e}")
+        return None
+
 
 def retrieve_documents(
     state: AgentState, *, config: Optional[RunnableConfig] = None
@@ -324,51 +384,59 @@ def retrieve_documents(
         response = llm.invoke(prompt).content.lower().strip()
         return 'yes' in response
 
-        # 如果是加密货币价格查询，直接使用 web search
+        
     if is_crypto_price_query(query):
-        print("Cryptocurrency price query detected, using web search...")
-        tool = TavilySearchResults(
-            max_results=5,
-            search_depth="advanced",
-            include_answer=True,
-            include_raw_content=True,
-            include_images=True,
-        )
+        print("Cryptocurrency price query detected, fetching real-time data...")
+        crypto_documents = get_crypto_data()
 
-        # 优化搜索查询以获取最新价格数据
-        enhanced_query = f"latest {query} cryptocurrency price market data real time"
-        
-        tool_call = {
-            "args": {"query": enhanced_query},
-            "id": str(uuid.uuid4()),
-            "name": "tavily_search",
-            "type": "tool_call"
-        }
-        
-        tool_message = tool.invoke(tool_call)
-        search_response = {k: str(v) for k, v in tool_message.artifact.items()}
-        results = eval(search_response['results'])
-        
-        web_documents = []
-        for result in results:
-            content = f"Content: {result['content']}\n"
-            if result.get('url'):
-                content += f"URL: {result['url']}\n"
-                
-            web_documents.append(
-                Document(
-                    page_content=content,
-                    metadata={
-                        "source": result.get('url', ''),
-                        "title": result.get('title', ''),
-                        "type": "web_search",
-                        "url": result.get('url', ''),
-                    }
-                )
+        if crypto_documents:
+            print("Successfully retrieved real-time cryptocurrency data")
+            state["documents"] = crypto_documents
+            return state
+        else:
+            print("Cryptocurrency price query detected, using web search...")
+            tool = TavilySearchResults(
+                max_results=5,
+                search_depth="advanced",
+                include_answer=True,
+                include_raw_content=True,
+                include_images=True,
             )
-        
-        state["documents"] = web_documents
-        return state
+    
+            # 优化搜索查询以获取最新价格数据
+            enhanced_query = f"latest {query} cryptocurrency price market data real time"
+            
+            tool_call = {
+                "args": {"query": enhanced_query},
+                "id": str(uuid.uuid4()),
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            
+            tool_message = tool.invoke(tool_call)
+            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+            results = eval(search_response['results'])
+            
+            web_documents = []
+            for result in results:
+                content = f"Content: {result['content']}\n"
+                if result.get('url'):
+                    content += f"URL: {result['url']}\n"
+                    
+                web_documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": result.get('url', ''),
+                            "title": result.get('title', ''),
+                            "type": "web_search",
+                            "url": result.get('url', ''),
+                        }
+                    )
+                )
+            
+            state["documents"] = web_documents
+            return state
     
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
@@ -510,49 +578,57 @@ def retrieve_documents_with_chat_history(
 
         # 如果是加密货币价格查询，直接使用 web search
     if is_crypto_price_query(query):
-        print("Cryptocurrency price query detected, using web search...")
-        tool = TavilySearchResults(
-            max_results=5,
-            search_depth="advanced",
-            include_answer=True,
-            include_raw_content=True,
-            include_images=True,
-        )
+        print("Cryptocurrency price query detected, fetching real-time data...")
+        crypto_documents = get_crypto_data()
 
-        # 优化搜索查询以获取最新价格数据
-        enhanced_query = f"latest {query} cryptocurrency price market data real time"
-        
-        tool_call = {
-            "args": {"query": enhanced_query},
-            "id": str(uuid.uuid4()),
-            "name": "tavily_search",
-            "type": "tool_call"
-        }
-        
-        tool_message = tool.invoke(tool_call)
-        search_response = {k: str(v) for k, v in tool_message.artifact.items()}
-        results = eval(search_response['results'])
-        
-        web_documents = []
-        for result in results:
-            content = f"Content: {result['content']}\n"
-            if result.get('url'):
-                content += f"URL: {result['url']}\n"
-                
-            web_documents.append(
-                Document(
-                    page_content=content,
-                    metadata={
-                        "source": result.get('url', ''),
-                        "title": result.get('title', ''),
-                        "type": "web_search",
-                        "url": result.get('url', ''),
-                    }
-                )
+        if crypto_documents:
+            print("Successfully retrieved real-time cryptocurrency data")
+            state["documents"] = crypto_documents
+            return state
+        else:
+            print("Cryptocurrency price query detected, using web search...")
+            tool = TavilySearchResults(
+                max_results=5,
+                search_depth="advanced",
+                include_answer=True,
+                include_raw_content=True,
+                include_images=True,
             )
-        
-        state["documents"] = web_documents
-        return state
+    
+            # 优化搜索查询以获取最新价格数据
+            enhanced_query = f"latest {query} cryptocurrency price market data real time"
+            
+            tool_call = {
+                "args": {"query": enhanced_query},
+                "id": str(uuid.uuid4()),
+                "name": "tavily_search",
+                "type": "tool_call"
+            }
+            
+            tool_message = tool.invoke(tool_call)
+            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+            results = eval(search_response['results'])
+            
+            web_documents = []
+            for result in results:
+                content = f"Content: {result['content']}\n"
+                if result.get('url'):
+                    content += f"URL: {result['url']}\n"
+                    
+                web_documents.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": result.get('url', ''),
+                            "title": result.get('title', ''),
+                            "type": "web_search",
+                            "url": result.get('url', ''),
+                        }
+                    )
+                )
+            
+            state["documents"] = web_documents
+            return state
     
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
