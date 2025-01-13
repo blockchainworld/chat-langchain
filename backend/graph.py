@@ -305,12 +305,26 @@ def format_docs(docs: Sequence[Document]) -> str:
         formatted_docs.append(doc_string)
     return "\n".join(formatted_docs)
 
-def log_event(run_manager: Optional[RunManager], message: str, metadata: Dict[str, Any] = None):
-    """记录事件到 LangSmith"""
-    if run_manager:
-        run_manager.on_text(f"\n{message}")
-        if metadata:
-            run_manager.on_text(f"\nMetadata: {json.dumps(metadata, indent=2)}")
+def log_event(callbacks, message, metadata=None):
+    """统一的日志记录函数"""
+    if callbacks:
+        # 处理单个 callback manager 的情况
+        if hasattr(callbacks, 'on_text'):
+            callbacks.on_text(f"\n{message}")
+            if metadata:
+                callbacks.on_text(f"\nMetadata: {json.dumps(metadata, indent=2)}")
+        # 处理 callback 列表的情况
+        elif isinstance(callbacks, list) and callbacks:
+            run_manager = callbacks[0]
+            if hasattr(run_manager, 'on_text'):
+                run_manager.on_text(f"\n{message}")
+                if metadata:
+                    run_manager.on_text(f"\nMetadata: {json.dumps(metadata, indent=2)}")
+        # 打印到控制台作为后备选项
+        else:
+            print(f"\n{message}")
+            if metadata:
+                print(f"Metadata: {json.dumps(metadata, indent=2)}")
 
 def get_crypto_data(run_manager: Optional[RunManager] = None):
     """获取加密货币数据并创建文档"""
@@ -376,8 +390,8 @@ def get_crypto_data(run_manager: Optional[RunManager] = None):
 def retrieve_documents(
     state: AgentState, *, config: Optional[RunnableConfig] = None
 ) -> AgentState:
-    # 获取 run_manager 用于记录日志
-    run_manager = config.get("callbacks", [None])[0] if config else None
+    # 获取 callbacks 用于记录日志
+    callbacks = config.get("callbacks") if config else None
     
     config = ensure_config(config)
     messages = convert_to_messages(state["messages"])
