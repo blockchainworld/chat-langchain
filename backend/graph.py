@@ -76,20 +76,12 @@ from backend.stock_utils import extract_and_fetch_stock_data, format_stock_info
 RESPONSE_TEMPLATE = """
 You are an expert in stocks, finance, and cryptocurrencies, tasked with answering any question related to these domains. You can communicate fluently in both English and Chinese.
 
-CRYPTOCURRENCY PRICE QUERIES:
-For ANY questions related to cryptocurrencies that involve:
-- Current prices or price movements
-- Market capitalization
-- Trading volume
-- Price predictions
-- Trading pairs
-- Market trends
-- Token metrics
-You MUST use the most current data. This applies to ALL types of cryptocurrencies, tokens, and digital assets including but not limited to:
-- Major cryptocurrencies (Bitcoin, Ethereum, etc.)
-- Altcoins and DeFi tokens
-- Meme coins and NFT projects
-- New or emerging cryptocurrencies
+CRYPTOCURRENCY QUERIES:
+For questions about cryptocurrency prices, market data, or trading information:
+- Provide available information from the context
+- Add this note at the end: 
+  * For English queries: "For real-time cryptocurrency data, please visit https://blockchain.news/price or other cryptocurrency tracking websites"
+  * For Chinese queries: "获取更准确的加密货币实时数据，请访问 https://blockchain.news/price 或其他加密货币数据网站"
 
 Generate a comprehensive and informative answer of 500 words or less for the given question based solely on the provided search results (URL and content). You must only use information from the provided search results. Use an unbiased and journalistic tone. Combine search results together into a coherent answer. Do not repeat text. Cite search results using [${{number}}] notation. Only cite the most relevant results that answer the question accurately. Place these citations at the end of the sentence or paragraph that reference them - do not put them all at the end. If different results refer to different entities within the same name, write separate answers for each entity.
 
@@ -658,59 +650,72 @@ def retrieve_documents_with_chat_history(
         response = llm.invoke(prompt).content.lower().strip()
         return 'yes' in response
 
-        # 如果是加密货币价格查询，直接使用 web search
+       
     if is_crypto_price_query(query):
-        print("Cryptocurrency price query detected, fetching real-time data...")
-        crypto_documents = get_crypto_data()
-
-        if crypto_documents:
-            print("Successfully retrieved real-time cryptocurrency data")
-            state["documents"] = crypto_documents
-            return state
-        else:
-            print("Cryptocurrency price query detected, using web search...")
-            tool = TavilySearchResults(
-                max_results=5,
-                search_depth="advanced",
-                include_answer=True,
-                include_raw_content=True,
-                include_images=True,
-            )
-    
-            # 优化搜索查询以获取最新价格数据
-            enhanced_query = f"latest {query} cryptocurrency price market data real time"
-            
-            tool_call = {
-                "args": {"query": enhanced_query},
-                "id": str(uuid.uuid4()),
-                "name": "tavily_search",
-                "type": "tool_call"
-            }
-            
-            tool_message = tool.invoke(tool_call)
-            search_response = {k: str(v) for k, v in tool_message.artifact.items()}
-            results = eval(search_response['results'])
-            
-            web_documents = []
-            for result in results:
-                content = f"Content: {result['content']}\n"
-                if result.get('url'):
-                    content += f"URL: {result['url']}\n"
-                    
-                web_documents.append(
-                    Document(
-                        page_content=content,
-                        metadata={
-                            "source": result.get('url', ''),
-                            "title": result.get('title', ''),
-                            "type": "web_search",
-                            "url": result.get('url', ''),
-                        }
+        print("Cryptocurrency price query detected, processing...")
+        
+        # 获取独立问题
+        standalone_question = condense_question_chain.invoke(
+            {"question": query, "chat_history": get_chat_history(messages[:-1])}
+        )
+        print(f"Standalone question for crypto query: {standalone_question}")
+        
+        # 使用独立问题重新检查是否是加密货币价格查询
+        if is_crypto_price_query(standalone_question):
+            print("Fetching real-time crypto data...")
+            try:
+                crypto_documents = get_crypto_data()
+                
+                if crypto_documents:
+                    print("Successfully retrieved real-time cryptocurrency data")
+                    state["documents"] = crypto_documents
+                    return state
+                else:
+                    print("Failed to get data from crypto API, falling back to web search...")
+                    tool = TavilySearchResults(
+                        max_results=5,
+                        search_depth="advanced",
+                        include_answer=True,
+                        include_raw_content=True,
+                        include_images=True,
                     )
-                )
             
-            state["documents"] = web_documents
-            return state
+                    # 使用独立问题优化搜索
+                    enhanced_query = f"latest {standalone_question} cryptocurrency price market data real time"
+                    
+                    tool_call = {
+                        "args": {"query": enhanced_query},
+                        "id": str(uuid.uuid4()),
+                        "name": "tavily_search",
+                        "type": "tool_call"
+                    }
+                    
+                    tool_message = tool.invoke(tool_call)
+                    search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+                    results = eval(search_response['results'])
+                    
+                    web_documents = []
+                    for result in results:
+                        content = f"Content: {result['content']}\n"
+                        if result.get('url'):
+                            content += f"URL: {result['url']}\n"
+                            
+                        web_documents.append(
+                            Document(
+                                page_content=content,
+                                metadata={
+                                    "source": result.get('url', ''),
+                                    "title": result.get('title', ''),
+                                    "type": "web_search",
+                                    "url": result.get('url', ''),
+                                }
+                            )
+                        )
+                    
+                    state["documents"] = web_documents
+                    return state
+            except Exception as e:
+                print(f"Error in crypto data retrieval: {str(e)}")
     
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
