@@ -638,6 +638,12 @@ def retrieve_documents_with_chat_history(
     # 设置查询到状态中
     state["query"] = query
 
+    # 获取独立问题
+    standalone_question = condense_question_chain.invoke(
+        {"question": query, "chat_history": get_chat_history(messages[:-1])}
+    )
+    print(f"Standalone question: {standalone_question}")
+
          # 添加加密货币价格查询检测
     def is_crypto_price_query(query: str) -> bool:
         # 使用 LLM 判断是否是加密货币价格查询
@@ -651,71 +657,61 @@ def retrieve_documents_with_chat_history(
         return 'yes' in response
 
        
-    if is_crypto_price_query(query):
-        print("Cryptocurrency price query detected, processing...")
-        
-        # 获取独立问题
-        standalone_question = condense_question_chain.invoke(
-            {"question": query, "chat_history": get_chat_history(messages[:-1])}
-        )
-        print(f"Standalone question for crypto query: {standalone_question}")
-        
-        # 使用独立问题重新检查是否是加密货币价格查询
-        if is_crypto_price_query(standalone_question):
-            print("Fetching real-time crypto data...")
-            try:
-                crypto_documents = get_crypto_data()
-                
-                if crypto_documents:
-                    print("Successfully retrieved real-time cryptocurrency data")
-                    state["documents"] = crypto_documents
-                    return state
-                else:
-                    print("Failed to get data from crypto API, falling back to web search...")
-                    tool = TavilySearchResults(
-                        max_results=5,
-                        search_depth="advanced",
-                        include_answer=True,
-                        include_raw_content=True,
-                        include_images=True,
-                    )
+    # 使用独立问题来判断是否是加密货币查询
+    if is_crypto_price_query(standalone_question):
+        print("Cryptocurrency price query detected, fetching real-time data...")
+        try:
+            crypto_documents = get_crypto_data()
             
-                    # 使用独立问题优化搜索
-                    enhanced_query = f"latest {standalone_question} cryptocurrency price market data real time"
-                    
-                    tool_call = {
-                        "args": {"query": enhanced_query},
-                        "id": str(uuid.uuid4()),
-                        "name": "tavily_search",
-                        "type": "tool_call"
-                    }
-                    
-                    tool_message = tool.invoke(tool_call)
-                    search_response = {k: str(v) for k, v in tool_message.artifact.items()}
-                    results = eval(search_response['results'])
-                    
-                    web_documents = []
-                    for result in results:
-                        content = f"Content: {result['content']}\n"
-                        if result.get('url'):
-                            content += f"URL: {result['url']}\n"
-                            
-                        web_documents.append(
-                            Document(
-                                page_content=content,
-                                metadata={
-                                    "source": result.get('url', ''),
-                                    "title": result.get('title', ''),
-                                    "type": "web_search",
-                                    "url": result.get('url', ''),
-                                }
-                            )
+            if crypto_documents:
+                print("Successfully retrieved real-time cryptocurrency data")
+                state["documents"] = crypto_documents
+                return state
+            else:
+                print("Failed to get data from crypto API, falling back to web search...")
+                tool = TavilySearchResults(
+                    max_results=5,
+                    search_depth="advanced",
+                    include_answer=True,
+                    include_raw_content=True,
+                    include_images=True,
+                )
+        
+                enhanced_query = f"latest {standalone_question} cryptocurrency price market data real time"
+                
+                tool_call = {
+                    "args": {"query": enhanced_query},
+                    "id": str(uuid.uuid4()),
+                    "name": "tavily_search",
+                    "type": "tool_call"
+                }
+                
+                tool_message = tool.invoke(tool_call)
+                search_response = {k: str(v) for k, v in tool_message.artifact.items()}
+                results = eval(search_response['results'])
+                
+                web_documents = []
+                for result in results:
+                    content = f"Content: {result['content']}\n"
+                    if result.get('url'):
+                        content += f"URL: {result['url']}\n"
+                        
+                    web_documents.append(
+                        Document(
+                            page_content=content,
+                            metadata={
+                                "source": result.get('url', ''),
+                                "title": result.get('title', ''),
+                                "type": "web_search",
+                                "url": result.get('url', ''),
+                            }
                         )
-                    
-                    state["documents"] = web_documents
-                    return state
-            except Exception as e:
-                print(f"Error in crypto data retrieval: {str(e)}")
+                    )
+                
+                state["documents"] = web_documents
+                return state
+        except Exception as e:
+            print(f"Error in crypto data retrieval: {str(e)}")
     
     # 先尝试本地检索
     with get_retriever(k=config["configurable"].get("k")) as retriever:
