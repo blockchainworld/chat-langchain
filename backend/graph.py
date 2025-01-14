@@ -329,7 +329,7 @@ def get_crypto_data(callbacks=None):
         log_event(callbacks, "🚀 Starting Binance API request")
         start_time = time.time()
         
-        url = "https://api.binance.com/api/v3/ticker/24hr"
+        url = "https://api.binance.us/api/v3/ticker/24hr"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         
